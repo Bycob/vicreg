@@ -19,9 +19,9 @@ def get_arguments():
     parser = argparse.ArgumentParser(description="Evaluate a pretrained model on cats and dogs")
 
     #parser.add_argument("--data-dir", type=Path, help="path to dataset")
-    parser.add_argument("--pretrained", type=Path, help="pathto dataset")
+    parser.add_argument("--pretrained", type=Path, help="path to dataset")
     parser.add_argument("--exp-dir", default="./checkpoint/lincls/", type=Path, metavar="DIR", help="path to checkpoint directory")
-    parser.add_argument("--print-freq", default=100, type=int, metavar="N", help="print frequencey")
+    parser.add_argument("--print-freq", default=100, type=int, metavar="N", help="print frequency")
     parser.add_argument("--arch", type=str, default="resnet50")
     parser.add_argument("--epochs", default=100, type=int, metavar="N", help="number of total epochs to run")
     parser.add_argument("--batch-size", default=256, type=int, metavar="N", help="mini-batch size")
@@ -38,14 +38,14 @@ def main():
     args = parser.parse_args()
     args.ngpus_per_node = torch.cuda.device_count()
     args.rank = 0
-    args.dist_url = f"tcp://localhost:{random.randrange(49152, 65535)}"
+    #args.dist_url = f"tcp://localhost:{random.randrange(49152, 65535)}"
     args.world_size = args.ngpus_per_node
     torch.multiprocessing.spawn(main_worker, (args,), args.ngpus_per_node)
 
 
 def main_worker(gpu, args):
     args.rank += gpu
-    torch.distributed.init_process_group(backend="nccl", init_method=args.dist_url, world_size=args.world_size, rank=args.rank)
+    torch.distributed.init_process_group(backend="nccl",  world_size=args.world_size, rank=args.rank)
 
     if args.rank == 0:
         args.exp_dir.mkdir(parents=True, exist_ok=True)
