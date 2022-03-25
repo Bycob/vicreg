@@ -1,4 +1,5 @@
 from pathlib import Path
+import numpy as np
 import argparse
 import json
 import os
@@ -11,6 +12,7 @@ import urllib
 from torch import nn, optim
 from torchvision import datasets, transforms
 import torch
+from torch.utils.data.sampler import SubsetRandomSampler
 
 import resnet
 
@@ -97,16 +99,17 @@ def main_worker(gpu, args):
     
     dataset = datasets.ImageFolder(datadir, transforms.Compose([transforms.RandomResizedCrop(224), transforms.RandomHorizontalFlip(), transforms.ToTensor(),normalize,]))
     num_data = len(dataset)
-    num_val = num_data // 5
+    indices = list(range(num_data))
+    np.random.shuffle(indices)
+    split = int(np.floor(0.2 * num_data))
+    train_idx, val_idx = indices[split:], indices[:split]
+    train_sampler = SubsetRandomSampler(train_idx)
+    val_sampler = SubsetRandomSampler(val_idx)
 
-    val_dataset = dataset[:num_val]
-    train_dataset = dataset[num_val:]
-
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     kwargs = dict(batch_size=args.batch_size // args.world_size, num_workers=args.workers, pin_memory=True)
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, shuffle=True, sampler=train_sampler, **kwargs)
-    val_loader = torch.utils.data.DataLoader(val_dataset, shuffle=True, **kwargs)
+    train_loader = torch.utils.data.DataLoader(dataset, sampler=train_sampler, **kwargs)
+    val_loader = torch.utils.data.DataLoader(dataset, sampler=val_sampler, **kwargs)
 
     start_time = time.time()
     for epoch in range(start_epoch, args.epochs):
@@ -117,7 +120,7 @@ def main_worker(gpu, args):
             model.eval()
         else:
             assert False
-        train_sampler.set_epoch(epoch)
+        #train_sampler.set_epoch(epoch)
         for step, (images, target) in enumerate(train_loader, start=epoch*len(train_loader)):
             output = model(images.cuda(gpu, non_blocking=True))
             loss = criterion(output, target.cuda(gpu, non_blocking=True))
