@@ -38,14 +38,14 @@ def main():
     args = parser.parse_args()
     args.ngpus_per_node = torch.cuda.device_count()
     args.rank = 0
-    #args.dist_url = f"tcp://localhost:{random.randrange(49152, 65535)}"
+    args.dist_url = f"tcp://localhost:{random.randrange(49152, 65535)}"
     args.world_size = args.ngpus_per_node
     torch.multiprocessing.spawn(main_worker, (args,), args.ngpus_per_node)
 
 
 def main_worker(gpu, args):
     args.rank += gpu
-    torch.distributed.init_process_group(backend="nccl",  world_size=args.world_size, rank=args.rank)
+    torch.distributed.init_process_group(backend="nccl", init_method=args.dist_url, world_size=args.world_size, rank=args.rank)
 
     if args.rank == 0:
         args.exp_dir.mkdir(parents=True, exist_ok=True)
