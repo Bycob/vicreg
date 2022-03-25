@@ -34,10 +34,11 @@ def get_arguments():
     return parser
 
 def main():
-    parser = get_arguments =()
+    parser = get_arguments()
     args = parser.parse_args()
+    args.ngpus_per_node = torch.cuda.device_count()
     args.rank = 0
-    arg.dist_url = f"tcp://localhost:{random.randrange(49152, 65535)}"
+    args.dist_url = f"tcp://localhost:{random.randrange(49152, 65535)}"
     args.world_size = args.ngpus_per_node
     torch.multiprocessing.spawn(main_worker, (args,), args.ngpus_per_node)
 
