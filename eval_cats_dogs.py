@@ -16,6 +16,9 @@ from torch.utils.data.sampler import SubsetRandomSampler
 
 import resnet
 
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID" # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"]="0" # Will use only the first GPU device
+
 
 def get_arguments():
     parser = argparse.ArgumentParser(description="Evaluate a pretrained model on cats and dogs")
