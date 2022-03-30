@@ -1,4 +1,7 @@
 from pathlib import Path
+import numpy as np
+import random
+import signal
 import argparse
 import json
 import math
@@ -6,11 +9,13 @@ import os
 import sys
 import time
 
+
 import torch
 import torch.nn.functional as F
 from torch import nn, optim
 import torch.distributed as dist
 import torchvision.datasets as datasets
+from torch.utils.data.sampler import SubsetRandomSampler
 
 import augmentations as aug
 from distributed import init_distributed_mode
@@ -20,10 +25,10 @@ import resnet
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
+
 def get_arguments():
     parser = argparse.ArgumentParser(description="Pretrain an asymmetric architecture with VICReg", add_help=False)
 
-    parser.add_argument("--data-dir", type=Path, default="/path/to/dataset", required=True, help='Path to the dataset')
     parser.add_argument("--exp-dir", type=Path, default="./exp", help='Path to the experiment folder, where all logs/checkpoints will be stored')
     parser.add_argument("--log-freq-time", type=int, default=60, help='Print logs, to the stats.txt file every [log-freq-time] seconds')
     parser.add_argument("--arch-1", type=str, default="resnet50", help='Architecture of the first backbone encoder network')
@@ -39,9 +44,11 @@ def get_arguments():
     parser.add_argument("--num-workers", type=int, default=10)
     parser.add_argument('--device', default='cuda', help='device to use for training / testing')
     parser.add_argument('--world-size', default=1, type=int, help='Number of distributed processes')
-    parser.add_argument('--local-rank', default=-1, type=int)
+    parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--dist-url', default='env://', help='url used to set up distributed training')
-
+    parser.add_argument("--print-freq", default=100, type=int, metavar="N", help="print frequency")
+    parser.add_argument("--epochs-test", default=100, type=int, metavar="N", help="number of total epochs to run")
+    
     return parser
 
 
@@ -56,15 +63,29 @@ def main(args):
         stats_file = open(args.exp_dir / "stats.txt", "a", buffering=1)
         print(" ".join(sys.argv))
         print(" ".join(sys.argv), file=stats_file)
+        stats_test_file = open(args.exp_dir / "stats_test.txt", "a", buffering=1)
+        print(" ".join(sys.argv))
+        print(" ".join(sys.argv), file=stats_test_file)
 
     transforms = aug.TrainTransform()
-
-    dataset = datasets.ImageFolder(args.data_dir / "train", transforms)
-    sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
+    datadir = "/data1/jeanne/datasets/dogs_cats"
+    
+    dataset = datasets.ImageFolder(datadir, transforms)
+    num_data = len(dataset)
+    indices = list(range(num_data))
+    np.random.shuffle(indices)
+    split = int(np.floor(0.2 * num_data))
+    train_idx, test_idx = indices[split:], indices[:split]
+    
+    train_sampler = SubsetRandomSampler(train_idx)
+    test_sampler = SubsetRandomSampler(test_idx)
     assert args.batch_size % args.world_size == 0
-    per_device_batch_size = args.batch_size // args.world_size
-    loader = torch.utils.data.DataLoader(dataset, batch_size=per_device_batch_size, num_workers=args.num_workers, pin_memory=True, sampler=sampler)
-
+    
+    kwargs = dict(batch_size=args.batch_size // args.world_size, num_workers=args.num_workers, pin_memory=True)
+    train_loader = torch.utils.data.DataLoader(dataset, sampler=train_sampler, **kwargs)
+    test_loader = torch.utils.data.DataLoader(dataset, sampler=test_sampler, **kwargs)
+    
+    
     model = Asym_VICReg(args).cuda(gpu)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
@@ -80,15 +101,17 @@ def main(args):
     else:
         start_epoch = 0
 
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
+    
     start_time = last_logging = time.time()
     scaler = torch.cuda.amp.GradScaler()
     for epoch in range(start_epoch, args.epochs):
         sampler.set_epoch(epoch)
-        for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
+        for step, ((x, y), _) in enumerate(train_loader, start=epoch * len(train_loader)):
             x = x.cuda(gpu, non_blocking=True)
             y = y.cuda(gpu, non_blocking=True)
 
-            lr = adjust_learning_rate(args, optimizer, loader, step)
+            lr = adjust_learning_rate(args, optimizer, train_loader, step)
 
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
@@ -109,8 +132,64 @@ def main(args):
             torch.save(state, args.exp_dir / "model.pth")
 
     if args.rank == 0:
-        torch.save(model.module.backbone.state_dict(), args.exp_dir : "resnet50.pth")
+        torch.save(model.module.backbone_1.state_dict(), args.exp_dir / "resnet50.pth")
+        torch.save(model.module.backbone_2.state_dict(), args.exp_dir / "resnet50x2.pth")
 
+    backbone, embedding = resnet.__dict__["resnet50"](zero_init_residual=True)
+    state_dict_test = torch.load(args.exp_dir / "resnet50.pth")
+    missing_keys, unexpected_keys = backbone.load_state_dict(state_dict_test, strict=False)
+    assert missing_keys == [] and unexpected_keys ==[]
+
+    head = nn.Linear(embedding, 1000)
+    head.weight.data.normal_(mean=0.0, std=0.01)
+    head.bias.data.zero_()
+    model_test = nn.Sequential(backbone, head)
+    model_test.cuda(gpu)
+    backbone.requires_grad_(False)
+    head.requires_grad_(True)
+    model_test = torch.nn.parallel.DistributedDataParallel(model_test, device_ids=[gpu])
+
+    criterion = nn.CrossEntropyLoss().cuda(gpu)
+
+    param_groups = [dict(params=head.parameters(), lr=args.lr_head)]
+    optimizer = optim.SGD(param_groups, 0, momentum=0.9, weight_decay=args.weight_decay)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
+
+    if (args.exp_dir / "checkpoint.pth").is_file():
+        ckpt = torch.load(args.exp_dir / "checkpoint.pth", map_location="cpu")
+        start_epoch = ckpt["epoch"]
+        best_acc = ckpt["best_acc"]
+        model_test.load_state_dict(ckpt["model"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        scheduler.load_state_dict(ckpt["scheduler"])
+    else:
+        start_epoch = 0
+        best_acc = argparse.Namespace(top1=0, top5=0)
+
+
+    start_time_test = time.time()
+    for epoch in range(start_epoch_test, args.epochs_test):
+
+        model.eval()
+        if args.rank == 0:
+            top1 = AverageMeter("Acc@1")
+            top5 = AverageMeter("Acc@5")
+            with torch.no_grad():
+                for images, target in test_loader:
+                    output = test_model(images.cuda(gpu, non_blocking=True))
+                    acc1, acc5 = accuracy(output, target.cuda(gpu, non_blocking=True), topk=(1, 5))
+                    top1.update(acc1[0].item(), images.size(0))
+                    top5.update(acc5[0].item(), images.size(0))
+            best_acc.top1 = max(best_acc.top1, top1.avg)
+            best_acc.top5 = max(best_acc.top5, top5.avg)
+            stats = dict(epoch=epoch, acc1=top1.avg, acc5=top5.avg, best_acc1=best_acc.top1, best_acc5=best_acc.top5)
+            print(json.dumps(stats))
+            print(json.dumps(stats), file=stats_test_file)
+
+        scheduler.step()
+        if args.rank == 0:
+            state = dict(epoch=epoch + 1, best_acc=best_acc, model=model.state_dict(), optimizer=optimizer.state_dict(), scheduler=scheduler.state_dict())
+            torch.save(state, args.exp_dir / "checkpoint.pth")
 
 def adjust_learning_rate(args, optimizer, loader, step):
     max_steps = args.epochs * len(loader)
@@ -141,7 +220,7 @@ class Asym_VICReg(nn.Module):
         if args.arch_2 =="resnetencoder":
             self.backbone_2, self.embedding_2 = ResnetEncoder()
         else:
-            self.backbone_2, self.embedding_2 = resnet.__dict__[args.arch_2](zer_init_residual=True)
+            self.backbone_2, self.embedding_2 = resnet.__dict__[args.arch_2](zero_init_residual=True)
         self.projector_1 = Projector(args, self.embedding_1)
         self.projector_2 = Projector(args, self.embedding_2)
 
@@ -169,7 +248,7 @@ class Asym_VICReg(nn.Module):
 
 
 def Projector(args, embedding):
-    mlp_spec = f"{embedding}-{args.mpl}"
+    mlp_spec = f"{embedding}-{args.mlp}"
     layers = []
     f = list(map(int, mlp_spec.split("-")))
     for i in range(len(f) - 2):
@@ -212,7 +291,7 @@ class LARS(optim.Optimizer):
                     param_norm = torch.norm(p)
                     update_norm = torch.norm(dp)
                     one = torch.ones_like(param_norm)
-                    q = torch.where(param > 0.0, torch.where(update_norm > 0, (g["eta"] * param_norm / update_norm), one), one,)
+                    q = torch.where(param_norm > 0.0, torch.where(update_norm > 0, (g["eta"] * param_norm / update_norm), one), one,)
                     dp = dp.mul(q)
 
                 param_state = self.state[p]
@@ -247,3 +326,4 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser('Asym_VICReg training script', parents=[get_arguments()])
     args = parser.parse_args()
     main(args)
+
