@@ -16,10 +16,11 @@ import torch.nn.functional as F
 from torch import nn, optim
 import torch.distributed as dist
 import torchvision.datasets as datasets
-from torch.utils.data.sampler import SubsetRandomSampler
+
 
 import augmentations as aug
 from distributed import init_distributed_mode
+from main_vicreg import adjust_learning_rate, Projector
 
 import resnet
 
@@ -30,6 +31,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 def get_arguments():
     parser = argparse.ArgumentParser(description="Pretrain an asymmetric architecture with VICReg", add_help=False)
 
+    parser.add_argument("--data-dir", type=Path, default="/data1/jeanne/datasets/dogs_cats", required=True, help="Path to the dataset")
     parser.add_argument("--exp-dir", type=Path, default="./exp", help='Path to the experiment folder, where all logs/checkpoints will be stored')
     parser.add_argument("--log-freq-time", type=int, default=60, help='Print logs, to the stats.txt file every [log-freq-time] seconds')
     parser.add_argument("--arch-1", type=str, default="resnet50", help='Architecture of the first backbone encoder network')
@@ -78,22 +80,12 @@ def main(args):
         
 
     transforms = aug.TrainTransform()
-    datadir = "/data1/jeanne/datasets/dogs_cats"
-    dataset = datasets.ImageFolder(datadir, transforms)
-    
-    num_data = len(dataset)
-    indices = list(range(num_data))
-    np.random.shuffle(indices)
-    split = int(np.floor(0.2 * num_data))
-    train_idx, test_idx = indices[split:], indices[:split]
-    
-    train_sampler = SubsetRandomSampler(train_idx)
-    test_sampler = SubsetRandomSampler(test_idx)
-    
+    dataset = datasets.ImageFolder(args.data_dir / "train", transforms)
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
+
     assert args.batch_size % args.world_size == 0
-    kwargs = dict(batch_size=args.batch_size // args.world_size, num_workers=args.num_workers, pin_memory=True)
-    train_loader = torch.utils.data.DataLoader(dataset, sampler=train_sampler, **kwargs)
-    test_loader = torch.utils.data.DataLoader(dataset, sampler=test_sampler, **kwargs)
+    per_device_batch_size = args.batch_size // args.world_size
+    loader = torch.utils.data.DataLoader(dataset, batch_size=per_device_batch_size, num_workers=args.num_workers, pin_memory=True, sampler=sampler)
 
     
     
@@ -120,22 +112,20 @@ def main(args):
 
 
         
-
-    #sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     
     start_time = last_logging = time.time()
     scaler = torch.cuda.amp.GradScaler()
     
     for epoch in range(start_epoch, args.epochs):
         
-        train_sampler.set_epoch(epoch)
+        sampler.set_epoch(epoch)
         
-        for step, ((x, y), _) in enumerate(train_loader, start=epoch * len(train_loader)):
+        for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
             
             x = x.cuda(gpu, non_blocking=True)
             y = y.cuda(gpu, non_blocking=True)
 
-            lr = adjust_learning_rate(args, optimizer, train_loader, step)
+            lr = adjust_learning_rate(args, optimizer, loader, step)
 
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
@@ -167,114 +157,6 @@ def main(args):
 
 
 
-
-
-        
-    backbone, embedding = resnet.__dict__["resnet50"](zero_init_residual=True)
-    state_dict_test = torch.load(args.exp_dir / "resnet50.pth")
-    missing_keys, unexpected_keys = backbone.load_state_dict(state_dict_test, strict=False)
-    assert missing_keys == [] and unexpected_keys ==[]
-
-    head = nn.Linear(embedding, 1000)
-    head.weight.data.normal_(mean=0.0, std=0.01)
-    head.bias.data.zero_()
-    
-    model_test = nn.Sequential(backbone, head)
-    model_test.cuda(gpu)
-    
-    backbone.requires_grad_(False)
-    head.requires_grad_(True)
-    model_test = torch.nn.parallel.DistributedDataParallel(model_test, device_ids=[gpu])
-
-    
-
-    criterion = nn.CrossEntropyLoss().cuda(gpu)
-
-    param_groups = [dict(params=head.parameters(), lr=0.02)]
-    optimizer = optim.SGD(param_groups, 0, momentum=0.9, weight_decay=args.wd)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
-
-
-    
-    if (args.exp_dir / "checkpoint.pth").is_file():
-        ckpt = torch.load(args.exp_dir / "checkpoint.pth", map_location="cpu")
-        start_epoch = ckpt["epoch"]
-        best_acc = ckpt["best_acc"]
-        model_test.load_state_dict(ckpt["model"])
-        optimizer.load_state_dict(ckpt["optimizer"])
-        scheduler.load_state_dict(ckpt["scheduler"])
-        
-    else:
-        start_epoch = 0
-        best_acc = argparse.Namespace(top1=0, top5=0)
-
-
-
-        
-    start_epoch_test = 0
-    start_time_test = time.time()
-    
-    for epoch in range(start_epoch_test, args.epochs_test):
-
-        model.eval()
-        
-        if args.rank == 0:
-            
-            top1 = AverageMeter("Acc@1")
-            top5 = AverageMeter("Acc@5")
-            
-            with torch.no_grad():
-                for images, target in test_loader:
-                    print(len(images))
-                    output = model_test(images.cuda(gpu, non_blocking=True))
-                    
-                    acc1, acc5 = accuracy(output, target.cuda(gpu, non_blocking=True), topk=(1, 5))
-                    top1.update(acc1[0].item(), images.size(0))
-                    top5.update(acc5[0].item(), images.size(0))
-
-                    
-            best_acc.top1 = max(best_acc.top1, top1.avg)
-            best_acc.top5 = max(best_acc.top5, top5.avg)
-            
-            stats = dict(epoch=epoch, acc1=top1.avg, acc5=top5.avg, best_acc1=best_acc.top1, best_acc5=best_acc.top5)
-            print(json.dumps(stats))
-            print(json.dumps(stats), file=stats_test_file)
-
-            
-        scheduler.step()
-        
-        if args.rank == 0:
-            state = dict(epoch=epoch + 1, best_acc=best_acc, model=model.state_dict(), optimizer=optimizer.state_dict(), scheduler=scheduler.state_dict())
-            torch.save(state, args.exp_dir / "checkpoint.pth")
-
-
-
-
-
-            
-def adjust_learning_rate(args, optimizer, loader, step):
-    
-    max_steps = args.epochs * len(loader)
-    warmup_steps = 10 * len(loader)
-    base_lr = args.base_lr * args.batch_size / 256
-
-    
-    if step < warmup_steps:
-        lr = base_lr * step / warmup_steps
-        
-    else:
-        step -= warmup_steps
-        max_steps -= warmup_steps
-        q = 0.5 * (1 + math.cos(math.pi * step / max_steps))
-        end_lr = base_lr * 0.001
-        lr = base_lr * q + end_lr * (1 - q)
-
-        
-    for param_group in optimizer.param_groups:
-        param_group["lr"] = lr
-
-        
-    return lr
 
 
 
@@ -335,24 +217,6 @@ class Asym_VICReg(nn.Module):
         return loss
 
     
-
-def Projector(args, embedding):
-    
-    mlp_spec = f"{embedding}-{args.mlp}"
-    layers = []
-    f = list(map(int, mlp_spec.split("-")))
-    
-    for i in range(len(f) - 2):
-        layers.append(nn.Linear(f[i], f[i + 1]))
-        layers.append(nn.BatchNorm1d(f[i+1]))
-        layers.append(nn.ReLU(True))
-        
-    layers.append(nn.Linear(f[-2], f[-1], bias=False))
-
-    
-    return nn.Sequential(*layers)
-
-
 
 
 
@@ -476,6 +340,27 @@ class AverageMeter(object):
     def __str__(self):
         fmtstr = "{name} {val" + self.fmt + "} ({avg" + self.fmt + "})"
         return fmtstr.format(**self.__dict__)
+
+
+
+    
+def accuracy(output, target, topk=(1,)):
+    
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = target.size(0)
+
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+        correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+
+            
+        return res
 
 
 
