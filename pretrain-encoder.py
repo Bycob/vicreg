@@ -14,13 +14,13 @@ import torchvision.datasets as datasets
 
 import augmentations as aug
 from distributed import init_distributed_mode
-from main_vicreg import VICReg, adjust_learning_rate, Projector, exclude_bias_and_norm, LARS, batch_all_gather, FullGatherLayer
+from main_vicreg import adjust_learning_rate, Projector, exclude_bias_and_norm, LARS, batch_all_gather, FullGatherLayer
 
 
 def get_arguments():
     parser = argparse.ArgumentParser(description="Pretrain an encoder with VICReg", add_help=False)
 
-    parser.add_argument("--data", type=float, default="dogs-cats", choices=("dogs-cats", "airbus-cracks"), help="chosen dataset")
+    parser.add_argument("--data", type=str, default="dogs-cats", choices=("dogs-cats", "airbus-cracks"), help="chosen dataset")
     parser.add_argument("--exp-dir", type=Path, default="./exp", help="Path to the experiment folder, where all logs/checkpoints will be stored")
     parser.add_argument("--log-freq-time", type=int, default=60, help="Print logs to the stats.txt file every [log-freq-time] seconds")
     parser.add_argument("--mlp", default="8192-8192-8192", help="Size and number of layers of the MLP expander head")
@@ -78,7 +78,7 @@ def main(args):
     train_loader = torch.utils.data.DataLoader(dataset, sampler=train_sampler, **kwargs)
     test_loader = torch.utils.data.DataLoader(dataset, sampler=test_sampler, **kwargs)
 
-    model = VICReg(args).cuda(gpu)
+    model = Encoder_VICReg(args).cuda(gpu)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
     optimizer = LARS(model.parameters(), lr=0, weight_decay=args.wd, weight_decay_filter=exclude_bias_and_norm, lars_adaptation_filter=exclude_bias_and_norm)
@@ -124,6 +124,105 @@ def main(args):
     if args.rank == 0:
         torch.save(model.module.backbone.state_dict(), args.exp_dir / "resnet50.pth")
 
+
+class Encoder_VICReg(nn.Module):                                                                                                                                                                           
+    def __init__(self, args):                                                                                                                                                                             
+        super().__init__()                                                                                                                                                                                
+        self.args = args                                                                                                                                                                                  
+        self.num_features = int(args.mlp.split("-")[-1])                                                                                                                                                  
+        self.backbone, self.embedding = ResnetEncoder()                                                                                                                                              
+        self.projector = Projector(args, self.embedding)
+
+    def forward(self, x, y):
+        x = self.projector(self.backbone(x))
+        y = self.projector(self.backbone(y))
+
+        repr_loss = F.mse_loss(x, y)
+
+        x = torch.cat(FullGatherLayer.apply(x), dim=0)
+        y = torch.cat(FullGatherLayer.apply(y), dim=0)
+        x = x - x.mean(dim=0)
+        y = y - y.mean(dim=0)
+
+        std_x = torch.sqrt(x.var(dim=0) + 0.0001)
+        std_y = torch.sqrt(y.var(dim=0) + 0.0001)
+        std_loss = torch.mean(F;relu(1 - std_x)) / 2 + torch.mean(F.relu(1 - std_y)) / 2
+
+        cov_x = (x.T @ x) / (self.args.batch_size - 1)
+        cov_y = (y.T @ y) / (self.args.batch_size - 1)
+        cov_loss = off_diagonal(cov_x).pow_(2).sum().div(self.num_features) + off_diagonal(cov_y).pow_(2).sum().div(self.num_features)
+
+        loss = (self.args.sim_coeff * repr_loss + self.args.std_coeff * std_loss + self.args.cov_coeff * cov_loss)
+
+        return loss
+
+
+
+class ResnetEncoder(nn.Module):
+    """Resnet-based generator that consists of Resnet blocks between a few downsampling/upsampling operations.
+    We adapt Torch code and idea from Justin Johnson's neural style transfer project(https://github.com/jcjohnson/fast-neural-style)
+    """
+    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=6, padding_type='reflect', use_spectral=False,conv=nn.Conv2d):
+        """Construct a Resnet-based encoder
+        Parameters:
+            input_nc (int)      -- the number of channels in input images
+            output_nc (int)     -- the number of channels in output images
+            ngf (int)           -- the number of filters in the last conv layer
+            norm_layer          -- normalization layer
+            use_dropout (bool)  -- if use dropout layers
+            n_blocks (int)      -- the number of ResNet blocks
+            padding_type (str)  -- the name of padding layer in conv layers: reflect | replicate | zero
+        """
+        assert(n_blocks >= 0)
+        super(ResnetEncoder, self).__init__()
+
+        model = []
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+        
+        fl = [nn.ReflectionPad2d(3),
+                 spectral_norm(nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0, bias=use_bias),use_spectral),
+                 norm_layer(ngf),
+                 nn.ReLU(True)]
+        model += fl
+        
+        n_downsampling = 2
+        for i in range(n_downsampling):  # add downsampling layers
+            mult = 2 ** i
+            dsp = [spectral_norm(nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1, bias=use_bias),use_spectral),
+                      norm_layer(ngf * mult * 2),
+                      nn.ReLU(True)]
+            model += dsp
+
+        mult = 2 ** n_downsampling
+        for i in range(n_blocks):       # add ResNet blocks
+            resblockl = [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias,conv=conv)]
+            model += resblockl
+
+        self.model = nn.Sequential(*model)
+
+    def compute_feats(self, input, extract_layer_ids=[]):
+        if -1 in extract_layer_ids:
+            extract_layer_ids.append(len(self.encoder))
+        feat = input
+        feats = []
+        for layer_id, layer in enumerate(self.model):
+            
+            feat = layer(feat)
+            if layer_id in extract_layer_ids:
+                feats.append(feat)
+        return feat, feats  # return both output and intermediate features
+        
+    def forward(self, input):
+        """Standard forward"""
+        output,_ = self.compute_feats(input)
+        return output
+
+    def get_feats(self, input, extract_layer_ids=[]):
+        _,feats = self.compute_feats(input, extract_layer_ids)
+        return feats
 
 
 
