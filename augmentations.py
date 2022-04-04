@@ -92,17 +92,16 @@ class TrainTransform(object):
 
 
 class Masking(object):
-    def __init__(self, mask_ratio):
+    def __init__(self, mask_ratio, img_size=224, patch_size=16, in_chans=3, embed_dim=1024):
         self.mask_ratio = mask_ratio
-
+        self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
+        num_patches = self.patch_embed.num_patches
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim), requires_grad=False)
+        self.patch_size = patch_size
+        
     def __call__(self, img):
-        img_size = 224
-        patch_size = 16
-        in_chans = 3
-        embed_dim = 1024
-        x  = PatchEmbed(img_size, patch_size, in_chans, embed_dim).forward(img)  #arguments à définir
-        num_patches = PatchEmbed(img_size, patch_size, in_chans, embed_dim).num_patches
-        x = x + nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim), requires_grad=False)[:, 1:, :]
+        x  = self.patch_embed(img)
+        x = x + self.pos_embed[:, 1:, :]
         
         N, L, D = x.shape
         len_keep = int(L * (1 - self.mask_ratio))
@@ -122,11 +121,15 @@ class Masking(object):
         
         return x_masked, mask, ids_restore
 
+    def patch_size(self):
+        return self.patch_size
+    
+
 
 
 class MaskTransform(object):
     def __init__(self):
-        self.transform = transforms.Compose([transforms.RandomResizedCrop(224, interpolation=InterpolationMode.BICUBIC), Masking(mask_ratio=0.75), transforms.ToTensor(), tranforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+        self.transform = transforms.Compose([transforms.RandomResizedCrop(224, interpolation=InterpolationMode.BICUBIC), transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
 
     def __call__(self, sample):
         x = self.transform(sample)
