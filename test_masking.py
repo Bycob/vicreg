@@ -39,12 +39,12 @@ def show_image(image, title=''):
     return
 
 
-def run_one_image(img):
-    x = torch.tensor(img)
+def run_one_image(x):
+    #x = torch.tensor(img)
     print(x.shape)
     # make it a batch-like
-    x = x.unsqueeze(dim=0)
-    print(x.shape)
+    #x = x.unsqueeze(dim=0)
+    #print(x.shape)
     x_masked, mask, _ = masking(x)
 
     # visualize the mask
