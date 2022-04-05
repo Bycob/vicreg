@@ -133,6 +133,8 @@ class MaskTransform(object):
 
     def __call__(self, sample):
         x = self.transform(sample)
-        return x
+        y = self.transform(sample)
+        
+        return x, y
 
 

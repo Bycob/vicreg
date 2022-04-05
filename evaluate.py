@@ -34,9 +34,9 @@ def get_arguments():
     parser.add_argument("--data-dir", type=Path, help="path to dataset")
     parser.add_argument(
         "--train-percent",
-        default=100,
-        type=int,
-        choices=(100, 10, 1),
+        default='100',
+        type=str,
+        choices=('100', '10', '1', 'zero1'),
         help="size of traing set in percent",
     )
 
@@ -107,10 +107,6 @@ def get_arguments():
 def main():
     parser = get_arguments()
     args = parser.parse_args()
-    if args.train_percent in {1, 10}:
-        args.train_files = urllib.request.urlopen(
-            f"https://raw.githubusercontent.com/google-research/simclr/master/imagenet_subsets/{args.train_percent}percent.txt"
-        ).readlines()
     args.ngpus_per_node = torch.cuda.device_count()
     if "SLURM_JOB_ID" in os.environ:
         signal.signal(signal.SIGUSR1, handle_sigusr1)
@@ -177,7 +173,11 @@ def main_worker(gpu, args):
         best_acc = argparse.Namespace(top1=0, top5=0)
 
     # Data loading code
-    traindir = args.data_dir / "train"
+    if args.train_percent == '100':
+        traindir = args.data_dir / "train"
+
+    elif args.train_percent in {'zero1', '1', '10'}:
+        traindir = args.data_dir / "".join(("train", args.train_percent))
     valdir = args.data_dir / "val"
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
@@ -206,14 +206,6 @@ def main_worker(gpu, args):
         ),
     )
 
-    if args.train_percent in {1, 10}:
-        train_dataset.samples = []
-        for fname in args.train_files:
-            fname = fname.decode().strip()
-            cls = fname.split("_")[0]
-            train_dataset.samples.append(
-                (traindir / cls / fname, train_dataset.class_to_idx[cls])
-            )
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     kwargs = dict(
