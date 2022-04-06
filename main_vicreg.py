@@ -13,12 +13,16 @@ import math
 import os
 import sys
 import time
+import random
 
 import torch
 import torch.nn.functional as F
 from torch import nn, optim
 import torch.distributed as dist
 import torchvision.datasets as datasets
+
+import numpy.typing
+from imgaug.augmenters import arithmetic
 
 import augmentations as aug
 from distributed import init_distributed_mode
@@ -93,8 +97,9 @@ def main(args):
         print(" ".join(sys.argv), file=stats_file)
 
     transforms = aug.TrainTransform()
+    transforms2 = aug.MaskTransform()
 
-    dataset = datasets.ImageFolder(args.data_dir / "train", transforms)
+    dataset = datasets.ImageFolder(args.data_dir / "train", transforms2)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
@@ -105,6 +110,7 @@ def main(args):
         pin_memory=True,
         sampler=sampler,
     )
+
 
     model = VICReg(args).cuda(gpu)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -132,14 +138,36 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         sampler.set_epoch(epoch)
         for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
-            x = x.cuda(gpu, non_blocking=True)
-            y = y.cuda(gpu, non_blocking=True)
+            #apply masking
+            x_x1 = random.randint(0, 111)
+            x_y1 = random.randint(0, 111)
+            x_x2 = random.randint(113, 224)
+            x_y2 = random.randint(113, 224)
+            
+            x = torch.einsum('nchw->hwcn', x)
+            x_masked = arithmetic.cutout(x, x_x1, x_y1, x_x2, x_y2)
+            x_masked = torch.tensor(x_masked)
+            
+            y_x1 = random.randint(0, 111)
+            y_y1 = random.randint(0, 111)
+            y_x2 = random.randint(113, 224)
+            y_y2 = random.randint(113, 224)
+
+            y = torch.einsum('nchw->hwcn', y)
+            y_masked = arithmetic.cutout(y, y_x1, y_y1, y_x2, y_y2)
+            y_masked = torch.tensor(y_masked)
+
+            x_masked = torch.einsum('hwcn->nchw', x_masked)
+            y_masked = torch.einsum('hwcn->nchw', y_masked)
+            
+            x_masked = x_masked.cuda(gpu, non_blocking=True)
+            y_masked = y_masked.cuda(gpu, non_blocking=True)
 
             lr = adjust_learning_rate(args, optimizer, loader, step)
 
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
-                loss = model.forward(x, y)
+                loss = model.forward(x_masked, y_masked)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()

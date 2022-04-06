@@ -1,22 +1,22 @@
 from pathlib import Path
+from typing import Optional
 import argparse
 import json
 import math
 import os
 import sys
 import time
-from typing import Any, Dict, List, Sequence, Optional
-from torch.cuda.amp import custom_fwd
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch import nn, optim
 import torch.distributed as dist
 import torchvision.datasets as datasets
+from torch.cuda.amp import custom_fwd
 
 import augmentations as aug
 from distributed import init_distributed_mode
+import iternorm as IterN
 
 import resnet
 
@@ -39,11 +39,8 @@ def get_arguments():
     # Model
     parser.add_argument("--arch", type=str, default="resnet50",
                         help='Architecture of the backbone encoder network')
-    parser.add_argument("--proj-output-dim", type=int, default=2048,
-                        help='Number of dimensions of the projected features')
-    parser.add_argument("--proj-hidden-dim", type=int, default=2048,
-                        help='Number of neurons in the hidden layers of the projector')
-    
+    parser.add_argument("--mlp", default="4096-4096-4096",
+                        help='Size and number of layers of the MLP expander head')
 
     # Optim
     parser.add_argument("--epochs", type=int, default=100,
@@ -56,11 +53,11 @@ def get_arguments():
                         help='Weight decay')
 
     # Loss
-    parser.add_argument("--sim-loss-weight", type=float, default=25.0,
+    parser.add_argument("--sim-coeff", type=float, default=25.0,
                         help='Invariance regularization loss coefficient')
-    parser.add_argument("--var-loss-weight", type=float, default=25.0,
+    parser.add_argument("--std-coeff", type=float, default=25.0,
                         help='Variance regularization loss coefficient')
-    parser.add_argument("--cov-loss-weight", type=float, default=200.0,
+    parser.add_argument("--cov-coeff", type=float, default=1.0,
                         help='Covariance regularization loss coefficient')
     parser.add_argument("--iternorm", action="store_true",
                         help='If true, an IterNorm layer will be appended to the projector')
@@ -188,23 +185,11 @@ class VIbCReg(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
-        self.num_features = args.proj_output_dim
-
+        self.num_features = int(args.mlp.split("-")[-1])
         self.backbone, self.embedding = resnet.__dict__[args.arch](
-            zero_init_residual=True)
-
-        # projector
-        self.projector = nn.Sequential(
-            nn.Linear(self.embedding, self.args.proj_hidden_dim),
-            nn.BatchNorm1d(self.args.proj_hidden_dim),
-            nn.GELU(),
-            nn.Linear(self.args.proj_hidden_dim, self.args.proj_hidden_dim),
-            nn.BatchNorm1d(self.args.proj_hidden_dim),
-            nn.GELU(),
-            nn.Linear(self.args.proj_hidden_dim, self.args.proj_output_dim),
-            IterNorm(proj_output_dim, num_groups=64, T=5, dim=2) if self.args.iternorm else nn.Identity(),
-        )
-
+            zero_init_residual=True
+            )
+        self.projector = Projector(args, self.embedding)
 
 
     def forward(self, x, y):
@@ -215,25 +200,42 @@ class VIbCReg(nn.Module):
 
         x = torch.cat(FullGatherLayer.apply(x), dim=0)
         y = torch.cat(FullGatherLayer.apply(y), dim=0)
-        x = x - x.mean(dim=0)
-        y = y - y.mean(dim=0)
+        #x = x - x.mean(dim=0)
+        #y = y - y.mean(dim=0)
 
         std_x = torch.sqrt(x.var(dim=0) + 0.0001)
         std_y = torch.sqrt(y.var(dim=0) + 0.0001)
-        std_loss = torch.mean(F.relu(1 - std_x)) / 2 + torch.mean(F.relu(1 - std_y)) / 2
+        std_loss = torch.mean(F.relu(1 - std_x)) + torch.mean(F.relu(1 - std_y))
 
-        cov_x = (x.T @ x) / (self.args.batch_size - 1)
-        cov_y = (y.T @ y) / (self.args.batch_size - 1)
-        cov_loss = off_diagonal(cov_x).pow_(2).sum().div(self.num_features) + off_diagonal(cov_y).pow_(2).sum().div(self.num_features)
+        x = x - x.mean(dim=0)
+        y = y - y.mean(dim=0)
+        norm_x = F.normalize(x, p=2, dim=0)
+        norm_y = F.normalize(y, p=2, dim=0)
+        norm_cov_x = (norm_x.T @ norm_x)
+        norm_cov_y = (norm_y.T @ norm_y)
+        norm_cov_loss = (off_diagonal(norm_cov_x)**2).mean() + (off_diagonal(norm_cov_y)**2).mean()
 
         loss = (
-            self.args.sim_loss_weight  * repr_loss
-            + self.args.var_loss_weight * std_loss
-            + self.args.cov_loss_weight * cov_loss
+            self.args.sim_coeff  * repr_loss
+            + self.args.std_coeff * std_loss
+            + self.args.cov_coeff * norm_cov_loss
             )
         return loss
 
 
+def Projector(args, embedding):
+    mlp_spec = f"{embedding}-{args.mlp}"
+    layers = []
+    f = list(map(int, mlp_spec.split("-")))
+    for i in range(len(f) - 2):
+        layers.append(nn.Linear(f[i], f[i + 1]))
+        layers.append(nn.BatchNorm1d(f[i + 1]))
+        layers.append(nn.ReLU(True))
+    layers.append(nn.Linear(f[-2], f[-1], bias=False))
+    layers.append(IterN.IterNorm(f[-1], num_groups=64, T=5, dim=2) if args.iternorm else nn.Identity())
+    return nn.Sequential(*layers)
+
+    
 def off_diagonal(x):
     n, m = x.shape
     assert n == m
@@ -323,86 +325,6 @@ class FullGatherLayer(torch.autograd.Function):
         all_gradients = torch.stack(grads)
         dist.all_reduce(all_gradients)
         return all_gradients[dist.get_rank()]
-
-
-class IterNorm(torch.nn.Module):
-    def __init__(
-        self,
-        num_features: int,
-        num_groups: int = 64,
-        num_channels: Optional[int] = None,
-        T: int = 5,
-        dim: int = 2,
-        eps: float = 1.0e-5,
-        momentum: float = 0.1,
-        affine: bool = True,
-    ):
-        super(IterNorm, self).__init__()
-        # assert dim == 4, 'IterNorm does not support 2D'
-        self.T = T
-        self.eps = eps
-        self.momentum = momentum
-        self.num_features = num_features
-        self.affine = affine
-        self.dim = dim
-        if num_channels is None:
-            num_channels = (num_features - 1) // num_groups + 1
-        num_groups = num_features // num_channels
-        while num_features % num_channels != 0:
-            num_channels //= 2
-            num_groups = num_features // num_channels
-        assert (
-            num_groups > 0 and num_features % num_groups == 0
-        ), f"num features={num_features}, num groups={num_groups}"
-        self.num_groups = num_groups
-        self.num_channels = num_channels
-        shape = [1] * dim
-        shape[1] = self.num_features
-        if self.affine:
-            self.weight = nn.Parameter(torch.Tensor(*shape))
-            self.bias = nn.Parameter(torch.Tensor(*shape))
-        else:
-            self.register_parameter("weight", None)
-            self.register_parameter("bias", None)
-
-        self.register_buffer("running_mean", torch.zeros(num_groups, num_channels, 1))
-        # running whiten matrix
-        self.register_buffer(
-            "running_wm",
-            torch.eye(num_channels).expand(num_groups, num_channels, num_channels).clone(),
-        )
-
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        if self.affine:
-            torch.nn.init.ones_(self.weight)
-            torch.nn.init.zeros_(self.bias)
-
-    @custom_fwd(cast_inputs=torch.float32)
-    def forward(self, X: torch.Tensor) -> torch.Tensor:
-        X_hat = iterative_normalization_py.apply(
-            X,
-            self.running_mean,
-            self.running_wm,
-            self.num_channels,
-            self.T,
-            self.eps,
-            self.momentum,
-            self.training,
-        )
-        # affine
-        if self.affine:
-            return X_hat * self.weight + self.bias
-
-        return X_hat
-
-    def extra_repr(self):
-        return (
-            f"{self.num_features}, num_channels={self.num_channels}, T={self.T}, eps={self.eps}, "
-            "momentum={momentum}, affine={affine}"
-        )
-
 
 
 if __name__ == "__main__":
