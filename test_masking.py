@@ -18,25 +18,31 @@ os.environ["CUDA_VISIBLE_DEVICES"]="0"
 transforms = aug.MaskTransform()
 masking = aug.Masking(mask_ratio=0.75)
 
+
 dataset = datasets.ImageFolder("/data1/jeanne/datasets/dogs_cats/train", transforms)
 kwargs = dict(batch_size=64, num_workers=10, pin_memory=True)
 loader = torch.utils.data.DataLoader(dataset, **kwargs)
 
 images, labels = next(iter(loader))
 
-patch_size = 16
 
+patch_size = 16
 
 imagenet_mean = np.array([0.485, 0.456, 0.406])
 imagenet_std = np.array([0.229, 0.224, 0.225])
 
+
+
 def show_image(image, title=''):
     # image is [H, W, 3]
     assert image.shape[2] == 3
+
     plt.imshow(torch.clip((image * imagenet_std + imagenet_mean) * 255, 0, 255).int())
     plt.title(title, fontsize=16)
     plt.axis('off')
+
     return
+
 
 
 def run_one_image(x):
@@ -45,6 +51,7 @@ def run_one_image(x):
     # make it a batch-like
     #x = x.unsqueeze(dim=0)
     #print(x.shape)
+
     x_masked, mask, _ = masking(x)
 
     # visualize the mask
@@ -70,15 +77,20 @@ def run_one_image(x):
     plt.show()
 
 
+    
+
 def unpatchify(x):
     p = patch_size
     h = w = int(sqrt(x.shape[1]))
     assert h * w == x.shape[1]
 
+    
     x = x.reshape(shape=(x.shape[0], h, w, p, p, 3))
     x = torch.einsum('nhwpqc->nchpwq', x)
     imgs = x.reshape(shape=(x.shape[0], 3, h*p, h*p))
     return imgs
+
+
 
 
 run_one_image(images[0])
