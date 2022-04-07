@@ -13,6 +13,8 @@ import torch.nn as nn
 import torch
 from timm.models.vision_transformer import PatchEmbed
 
+
+
 class GaussianBlur(object):
     def __init__(self, p):
         self.p = p
@@ -25,6 +27,7 @@ class GaussianBlur(object):
             return img
 
 
+        
 class Solarization(object):
     def __init__(self, p):
         self.p = p
@@ -35,6 +38,7 @@ class Solarization(object):
         else:
             return img
 
+        
 
 class TrainTransform(object):
     def __init__(self):
@@ -91,6 +95,8 @@ class TrainTransform(object):
         return x1, x2
 
 
+    
+
 class Masking(object):
     def __init__(self, mask_ratio, img_size=224, patch_size=16, in_chans=3, embed_dim=1024):
         self.mask_ratio = mask_ratio
@@ -98,6 +104,7 @@ class Masking(object):
         num_patches = self.patch_embed.num_patches
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim), requires_grad=False)
         self.patch_size = patch_size
+
         
     def __call__(self, img):
         x  = self.patch_embed(img)
@@ -116,11 +123,12 @@ class Masking(object):
 
         mask = torch.ones([N, L], device=img.device)
         mask[:, :len_keep] = 0
-
         mask = torch.gather(mask, dim=1, index=ids_restore)
         
         return x_masked, mask, ids_restore
 
+
+    
     def patch_size(self):
         return self.patch_size
     
@@ -129,8 +137,15 @@ class Masking(object):
 
 class MaskTransform(object):
     def __init__(self):
-        self.transform = transforms.Compose([transforms.RandomResizedCrop(224, interpolation=InterpolationMode.BICUBIC), transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+        self.transform = transforms.Compose(
+            [
+                transforms.RandomResizedCrop(224, interpolation=InterpolationMode.BICUBIC),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ]
+        )
 
+        
     def __call__(self, sample):
         x = self.transform(sample)
         y = self.transform(sample)

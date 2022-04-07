@@ -24,35 +24,77 @@ from main_vicreg import adjust_learning_rate, Projector
 
 import resnet
 
+
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+
+
+
+
 
 
 def get_arguments():
     parser = argparse.ArgumentParser(description="Pretrain an asymmetric architecture with VICReg", add_help=False)
 
-    parser.add_argument("--data-dir", type=Path, default="/data1/jeanne/datasets/dogs_cats", required=True, help="Path to the dataset")
-    parser.add_argument("--exp-dir", type=Path, default="./exp", help='Path to the experiment folder, where all logs/checkpoints will be stored')
-    parser.add_argument("--log-freq-time", type=int, default=60, help='Print logs, to the stats.txt file every [log-freq-time] seconds')
-    parser.add_argument("--arch-1", type=str, default="resnet50", help='Architecture of the first backbone encoder network')
-    parser.add_argument("--arch-2", type=str, default="resnet50", help='Architecture of the second backbone encoder network')
-    parser.add_argument("--mlp", default="8192-8192-8192", help='Size and number of layers of the MLP expander head')
-    parser.add_argument("--epochs", type=int, default=100, help='Number of epochs')
-    parser.add_argument("--batch-size", type=int, default=2048, help='Effective batch size (per worker batch size is [batch-size] / world-size)')
-    parser.add_argument("--base-lr", type=float, default=0.2, help='Base learning rate, effective learning rate after warmup is [base-lr]*[batch-size] / 256')
-    parser.add_argument("--wd", type=float, default=1e-6, help='Weight decay')
-    parser.add_argument("--sim-coeff", type=float, default=25.0, help='Invariance regularization loss coefficient')
-    parser.add_argument("--std-coeff", type=float, default=25.0, help='Variance regularization loss coefficient')
-    parser.add_argument("--cov-coeff", type=float, default=1.0, help='Covariance regularization loss coefficient')
+    #Data
+    parser.add_argument("--data-dir", type=Path, default="/data1/jeanne/datasets/dogs_cats", required=True,
+                        help="Path to the dataset")
+
+    #Checkpoints
+    parser.add_argument("--exp-dir", type=Path, default="./exp",
+                        help='Path to the experiment folder, where all logs/checkpoints will be stored')
+    parser.add_argument("--log-freq-time", type=int, default=60,
+                        help='Print logs, to the stats.txt file every [log-freq-time] seconds')
+
+    #Model
+    parser.add_argument("--arch-1", type=str, default="resnet50",
+                        help='Architecture of the first backbone encoder network')
+    parser.add_argument("--arch-2", type=str, default="resnet50",
+                        help='Architecture of the second backbone encoder network')
+    parser.add_argument("--mlp", default="8192-8192-8192",
+                        help='Size and number of layers of the MLP expander head')
+
+    #Optim
+    parser.add_argument("--epochs", type=int, default=100,
+                        help='Number of epochs')
+    parser.add_argument("--batch-size", type=int, default=2048,
+                        help='Effective batch size (per worker batch size is [batch-size] / world-size)')
+    parser.add_argument("--base-lr", type=float, default=0.2,
+                        help='Base learning rate, effective learning rate after warmup is [base-lr]*[batch-size] / 256')
+    parser.add_argument("--wd", type=float, default=1e-6,
+                        help='Weight decay')
+
+    #Loss
+    parser.add_argument("--sim-coeff", type=float, default=25.0,
+                        help='Invariance regularization loss coefficient')
+    parser.add_argument("--std-coeff", type=float, default=25.0,
+                        help='Variance regularization loss coefficient')
+    parser.add_argument("--cov-coeff", type=float, default=1.0,
+                        help='Covariance regularization loss coefficient')
+
+    #Runnning
     parser.add_argument("--num-workers", type=int, default=10)
-    parser.add_argument('--device', default='cuda', help='device to use for training / testing')
-    parser.add_argument('--world-size', default=1, type=int, help='Number of distributed processes')
+    parser.add_argument('--device', default='cuda',
+                        help='device to use for training / testing')
+
+    #Distributed
+    parser.add_argument('--world-size', default=1, type=int,
+                        help='Number of distributed processes')
     parser.add_argument('--local_rank', default=-1, type=int)
-    parser.add_argument('--dist-url', default='env://', help='url used to set up distributed training')
-    parser.add_argument("--print-freq", default=100, type=int, metavar="N", help="print frequency")
-    parser.add_argument("--epochs-test", default=100, type=int, metavar="N", help="number of total epochs to run")
+    parser.add_argument('--dist-url', default='env://',
+                        help='url used to set up distributed training')
+
+    #Testing
+    parser.add_argument("--print-freq", default=100, type=int, metavar="N",
+                        help="print frequency")
+    parser.add_argument("--epochs-test", default=100, type=int, metavar="N",
+                        help="number of total epochs to run")
+
+
     
     return parser
+
 
 
 
@@ -85,7 +127,13 @@ def main(args):
 
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
-    loader = torch.utils.data.DataLoader(dataset, batch_size=per_device_batch_size, num_workers=args.num_workers, pin_memory=True, sampler=sampler)
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=per_device_batch_size,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        sampler=sampler
+    )
 
     
     
@@ -93,7 +141,13 @@ def main(args):
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
     
-    optimizer = LARS(model.parameters(), lr=0, weight_decay=args.wd, weight_decay_filter=exclude_bias_and_norm, lars_adaptation_filter=exclude_bias_and_norm)
+    optimizer = LARS(
+        model.parameters(),
+        lr=0,
+        weight_decay=args.wd,
+        weight_decay_filter=exclude_bias_and_norm,
+        lars_adaptation_filter=exclude_bias_and_norm
+    )
 
 
     
@@ -120,8 +174,7 @@ def main(args):
         
         sampler.set_epoch(epoch)
         
-        for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
-            
+        for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)): 
             x = x.cuda(gpu, non_blocking=True)
             y = y.cuda(gpu, non_blocking=True)
 
@@ -138,7 +191,13 @@ def main(args):
             current_time = time.time()
             if args.rank == 0 and current_time - last_logging > args.log_freq_time:
                 
-                stats = dict(epoch=epoch, step=step, loss=loss.item(), time=int(current_time - start_time), lr=lr)
+                stats = dict(
+                    epoch=epoch,
+                    step=step,
+                    loss=loss.item(),
+                    time=int(current_time - start_time),
+                    lr=lr
+                )
                 print(json.dumps(stats))
                 print(json.dumps(stats), file=stats_file)
                 last_logging = current_time
@@ -146,7 +205,11 @@ def main(args):
 
                 
         if args.rank == 0:
-            state = dict(epoch=epoch + 1, model=model.state_dict(), optimizer=optimizer.state_dict())
+            state = dict(
+                epoch=epoch + 1,
+                model=model.state_dict(),
+                optimizer=optimizer.state_dict()
+            )
             torch.save(state, args.exp_dir / "model.pth")
 
 
@@ -173,14 +236,12 @@ class Asym_VICReg(nn.Module):
         
         if args.arch_1 == "resnetencoder":
             self.backbone_1, self.embedding_1 = ResnetEncoder()
-            
         else:
             self.backbone_1, self.embedding_1 = resnet.__dict__[args.arch_1](zero_init_residual=True)
 
             
         if args.arch_2 =="resnetencoder":
             self.backbone_2, self.embedding_2 = ResnetEncoder()
-            
         else:
             self.backbone_2, self.embedding_2 = resnet.__dict__[args.arch_2](zero_init_residual=True)
 
@@ -209,9 +270,14 @@ class Asym_VICReg(nn.Module):
 
         cov_x = (x.T @ x) / (self.args.batch_size - 1)
         cov_y = (y.T @ y) / (self.args.batch_size - 1)
-        cov_loss = off_diagonal(cov_x).pow_(2).sum().div(self.num_features) + off_diagonal(cov_y).pow_(2).sum().div(self.num_features)
+        cov_loss = off_diagonal(cov_x).pow_(2).sum().div(self.num_features
+        ) + off_diagonal(cov_y).pow_(2).sum().div(self.num_features)
 
-        loss = (self.args.sim_coeff * repr_loss + self.args.std_coeff * std_loss + self.args.cov_coeff * cov_loss)
+        loss = (
+            self.args.sim_coeff * repr_loss +
+            self.args.std_coeff * std_loss +
+            self.args.cov_coeff * cov_loss
+        )
 
         
         return loss
@@ -241,7 +307,14 @@ class LARS(optim.Optimizer):
 
     def __init__(self, params, lr, weight_decay=0, momentum=0.9, eta=0.001, weight_decay_filter=None, lars_adaptation_filter=None):
         
-        defaults = dict(lr=lr, weight_decay=weight_decay, momentum=momentum, eta=eta, weight_decay_filter=weight_decay_filter, lars_adaptation_filter=lars_adaptation_filter)
+        defaults = dict(
+            lr=lr,
+            weight_decay=weight_decay,
+            momentum=momentum,
+            eta=eta,
+            weight_decay_filter=weight_decay_filter,
+            lars_adaptation_filter=lars_adaptation_filter
+        )
         super().__init__(params, defaults)
 
 
@@ -251,7 +324,6 @@ class LARS(optim.Optimizer):
         
         for g in self.param_groups:
             for p in g["params"]:
-                
                 dp = p.grad
 
                 if dp is None:
@@ -264,7 +336,11 @@ class LARS(optim.Optimizer):
                     param_norm = torch.norm(p)
                     update_norm = torch.norm(dp)
                     one = torch.ones_like(param_norm)
-                    q = torch.where(param_norm > 0.0, torch.where(update_norm > 0, (g["eta"] * param_norm / update_norm), one), one,)
+                    q = torch.where(
+                        param_norm > 0.0,
+                        torch.where(update_norm > 0, (g["eta"] * param_norm / update_norm), one),
+                        one,
+                    )
                     dp = dp.mul(q)
 
                 param_state = self.state[p]
