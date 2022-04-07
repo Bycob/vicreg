@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import math
 
 
+
 class ResnetEncoder(nn.Module):
     """Resnet-based generator that consists of Resnet blocks between a few downsampling/upsampling operations.
     We adapt Torch code and idea from Justin Johnson's neural style transfer project(https://github.com/jcjohnson/fast-neural-style)
@@ -20,10 +21,13 @@ class ResnetEncoder(nn.Module):
             n_blocks (int)      -- the number of ResNet blocks
             padding_type (str)  -- the name of padding layer in conv layers: reflect | replicate | zero
         """
+        
         assert(n_blocks >= 0)
         super(ResnetEncoder, self).__init__()
 
+        
         model = []
+
         if type(norm_layer) == functools.partial:
             use_bias = norm_layer.func == nn.InstanceNorm2d
         else:
@@ -34,6 +38,7 @@ class ResnetEncoder(nn.Module):
                  norm_layer(ngf),
                  nn.ReLU(True)]
         model += fl
+
         
         n_downsampling = 2
         for i in range(n_downsampling):  # add downsampling layers
@@ -48,25 +53,31 @@ class ResnetEncoder(nn.Module):
             resblockl = [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias,conv=conv)]
             model += resblockl
 
+            
         self.model = nn.Sequential(*model)
 
+
+        
     def compute_feats(self, input, extract_layer_ids=[]):
         if -1 in extract_layer_ids:
             extract_layer_ids.append(len(self.encoder))
+
         feat = input
         feats = []
-        for layer_id, layer in enumerate(self.model):
-            
+        for layer_id, layer in enumerate(self.model):    
             feat = layer(feat)
             if layer_id in extract_layer_ids:
                 feats.append(feat)
+                
         return feat, feats  # return both output and intermediate features
-        
+
+    
     def forward(self, input):
         """Standard forward"""
         output,_ = self.compute_feats(input)
         return output
 
+    
     def get_feats(self, input, extract_layer_ids=[]):
         _,feats = self.compute_feats(input, extract_layer_ids)
         return feats
@@ -88,6 +99,8 @@ class ResnetBlock(nn.Module):
         super(ResnetBlock, self).__init__()
         self.conv = conv
         self.conv_block = self.build_conv_block(dim, padding_type, norm_layer, use_dropout, use_bias, use_spectral)
+
+
 
     def build_conv_block(self, dim, padding_type, norm_layer, use_dropout, use_bias, use_spectral):
         """Construct a convolutional block.
@@ -127,6 +140,8 @@ class ResnetBlock(nn.Module):
 
         return nn.Sequential(*conv_block)
 
+
+    
     def forward(self, x):
         """Forward function (with skip connections)"""
         out = x + self.conv_block(x)  # add skip connections
@@ -214,6 +229,7 @@ def init_net(net, init_type='normal', init_gain=0.02):
     """
 
     init_weights(net, init_type, init_gain=init_gain)
+
     return net
 
 
