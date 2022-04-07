@@ -1,0 +1,23 @@
+vicreg/evaluate.py --data-dir /data1/jeanne/datasets/dogs_cats/ --pretrained exp_vic_4096/resnet50.pth --lr-head 0.02 --epochs 20 --train-perc 10
+{"epoch": 0, "step": 0, "lr_backbone": 0, "lr_head": 0.02, "loss": 7.120420455932617, "time": 9}
+{"epoch": 0, "acc1": 79.51, "acc5": 100.0, "best_acc1": 79.51, "best_acc5": 100.0}
+{"epoch": 1, "acc1": 85.18, "acc5": 100.0, "best_acc1": 85.18, "best_acc5": 100.0}
+{"epoch": 2, "acc1": 83.46, "acc5": 100.0, "best_acc1": 85.18, "best_acc5": 100.0}
+{"epoch": 3, "acc1": 83.79, "acc5": 100.0, "best_acc1": 85.18, "best_acc5": 100.0}
+{"epoch": 4, "acc1": 86.65, "acc5": 100.0, "best_acc1": 86.65, "best_acc5": 100.0}
+{"epoch": 5, "acc1": 86.32, "acc5": 100.0, "best_acc1": 86.65, "best_acc5": 100.0}
+{"epoch": 6, "acc1": 86.59, "acc5": 100.0, "best_acc1": 86.65, "best_acc5": 100.0}
+{"epoch": 7, "acc1": 86.98, "acc5": 100.0, "best_acc1": 86.98, "best_acc5": 100.0}
+{"epoch": 8, "acc1": 86.55, "acc5": 100.0, "best_acc1": 86.98, "best_acc5": 100.0}
+{"epoch": 9, "acc1": 87.17, "acc5": 100.0, "best_acc1": 87.17, "best_acc5": 100.0}
+{"epoch": 10, "step": 100, "lr_backbone": 0, "lr_head": 0.01, "loss": 0.3877512812614441, "time": 275}
+{"epoch": 10, "acc1": 86.76, "acc5": 100.0, "best_acc1": 87.17, "best_acc5": 100.0}
+{"epoch": 11, "acc1": 86.87, "acc5": 100.0, "best_acc1": 87.17, "best_acc5": 100.0}
+{"epoch": 12, "acc1": 86.9, "acc5": 100.0, "best_acc1": 87.17, "best_acc5": 100.0}
+{"epoch": 13, "acc1": 85.08, "acc5": 100.0, "best_acc1": 87.17, "best_acc5": 100.0}
+{"epoch": 14, "acc1": 87.02, "acc5": 100.0, "best_acc1": 87.17, "best_acc5": 100.0}
+{"epoch": 15, "acc1": 87.2, "acc5": 100.0, "best_acc1": 87.2, "best_acc5": 100.0}
+{"epoch": 16, "acc1": 87.49, "acc5": 100.0, "best_acc1": 87.49, "best_acc5": 100.0}
+{"epoch": 17, "acc1": 87.33, "acc5": 100.0, "best_acc1": 87.49, "best_acc5": 100.0}
+{"epoch": 18, "acc1": 87.43, "acc5": 100.0, "best_acc1": 87.49, "best_acc5": 100.0}
+{"epoch": 19, "acc1": 87.47, "acc5": 100.0, "best_acc1": 87.49, "best_acc5": 100.0}
