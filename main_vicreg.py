@@ -26,8 +26,11 @@ from imgaug.augmenters import arithmetic
 
 import augmentations as aug
 from distributed import init_distributed_mode
+import encoder
 
 import resnet
+import imgaug.augmenters as iaa
+
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -139,26 +142,39 @@ def main(args):
         sampler.set_epoch(epoch)
         for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
             #apply masking
-            #x_x1 = random.randint(0, 111)
-            #x_y1 = random.randint(0, 111)
-            #x_x2 = random.randint(113, 224)
-            #x_y2 = random.randint(113, 224)
+            """x_x1 = random.randint(0, 111)
+            x_y1 = random.randint(0, 111)
+            x_x2 = random.randint(113, 224)
+            x_y2 = random.randint(113, 224) coarsedropout
             
-            #x = torch.einsum('nchw->hwcn', x)
-            #x_masked = arithmetic.cutout(x, x_x1, x_y1, x_x2, x_y2)
-            #x_masked = torch.tensor(x_masked)
+            x = torch.einsum('nchw->hwcn', x)
+            x_masked = arithmetic.cutout(x, x_x1, x_y1, x_x2, x_y2)
+            x_masked = torch.tensor(x_masked)
             
-            #y_x1 = random.randint(0, 111)
-            #y_y1 = random.randint(0, 111)
-            #y_x2 = random.randint(113, 224)
-            #y_y2 = random.randint(113, 224)
+            y_x1 = random.randint(0, 111)
+            y_y1 = random.randint(0, 111)
+            y_x2 = random.randint(113, 224)
+            y_y2 = random.randint(113, 224)
 
-            #y = torch.einsum('nchw->hwcn', y)
-            #y_masked = arithmetic.cutout(y, y_x1, y_y1, y_x2, y_y2)
-            #y_masked = torch.tensor(y_masked)
+            y = torch.einsum('nchw->hwcn', y)
+            y_masked = arithmetic.cutout(y, y_x1, y_y1, y_x2, y_y2)
+            y_masked = torch.tensor(y_masked)
 
-            #x_masked = torch.einsum('hwcn->nchw', x_masked)
-            #y_masked = torch.einsum('hwcn->nchw', y_masked)
+            x_masked = torch.einsum('hwcn->nchw', x_masked)
+            y_masked = torch.einsum('hwcn->nchw', y_masked)"""
+            x = torch.einsum('nchw->nhwc', x)
+            y = torch.einsum('nchw->nhwc', y)
+            x = x.numpy()
+            y = y.numpy()
+
+            cut = iaa.Cutout(nb_iterations=1)
+            x = cut(images=x)
+            y = cut(images=y)
+
+            x = torch.tensor(x)
+            y = torch.tensor(y)
+            x = torch.einsum('nhwc->nchw', x)
+            y = torch.einsum('nhwc->nchw', y)
             
             x = x.cuda(gpu, non_blocking=True)
             y = y.cuda(gpu, non_blocking=True)
@@ -217,9 +233,9 @@ class VICReg(nn.Module):
         super().__init__()
         self.args = args
         self.num_features = int(args.mlp.split("-")[-1])
-        self.backbone, self.embedding = resnet.__dict__[args.arch](
-            zero_init_residual=True
-        )
+        self.backbone, self.embedding = resnet.__dict__[args.arch](zero_init_residual=True)
+        #self.backbone = encoder.ResnetEncoder(input_nc=3, output_nc=3)
+        #self.embedding = 56
                 
         self.projector = Projector(args, self.embedding)
 
@@ -238,7 +254,7 @@ class VICReg(nn.Module):
         std_y = torch.sqrt(y.var(dim=0) + 0.0001)
         std_loss = torch.mean(F.relu(1 - std_x)) / 2 + torch.mean(F.relu(1 - std_y)) / 2
 
-        cov_x = (x.T @ x) / (self.args.batch_size - 1)
+        cov_x = (x.T @ x) / (self.args.batch_size - 1) #torch.transpose(x, 2, 3)
         cov_y = (y.T @ y) / (self.args.batch_size - 1)
         cov_loss = off_diagonal(cov_x).pow_(2).sum().div(
             self.num_features
@@ -270,8 +286,10 @@ def exclude_bias_and_norm(p):
 
 def off_diagonal(x):
     n, m = x.shape
+    #a, b, n, m = x.shape
     assert n == m
     return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
+    #return x.flatten(start_dim=2)[:, :, :-1].view(a, b, n - 1, n + 1)[:, :, :, 1:].flatten()
 
 
 class LARS(optim.Optimizer):
