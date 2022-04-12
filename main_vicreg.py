@@ -220,6 +220,7 @@ class VICReg(nn.Module):
         self.backbone, self.embedding = resnet.__dict__[args.arch](
             zero_init_residual=True
         )
+                
         self.projector = Projector(args, self.embedding)
 
     def forward(self, x, y):

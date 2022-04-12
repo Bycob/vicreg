@@ -23,7 +23,6 @@ import numpy.typing
 from imgaug.augmenters import arithmetic
 
 import resnet
-import lightweighted_resnet
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -214,11 +213,10 @@ class VIbCReg(nn.Module):
         super().__init__()
         self.args = args
         self.num_features = int(args.mlp.split("-")[-1])
-        #self.backbone, self.embedding = resnet.__dict__[args.arch](
-        #    zero_init_residual=True
-        #    )
-        self.backbone = lightweighted_resnet.light_resnet(zero_init_residual=True)
-        self.embedding = 1000
+        self.backbone, self.embedding = resnet.__dict__[args.arch](
+            zero_init_residual=True
+            )
+
         self.projector = Projector(args, self.embedding)
 
 
