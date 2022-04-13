@@ -1,0 +1,33 @@
+vicreg/evaluate.py --data-dir /data1/jeanne/datasets/dogs_cats/ --pretrained exp/resnet50.pth --lr-head 0.02 --epochs 20
+{"epoch": 0, "step": 0, "lr_backbone": 0, "lr_head": 0.02, "loss": 6.712263584136963, "time": 9}
+{"epoch": 0, "acc1": 69.37, "acc5": 100.0, "best_acc1": 69.37, "best_acc5": 100.0}
+{"epoch": 1, "step": 100, "lr_backbone": 0, "lr_head": 0.019876883405951378, "loss": 0.5851709246635437, "time": 56}
+{"epoch": 1, "acc1": 72.52, "acc5": 100.0, "best_acc1": 72.52, "best_acc5": 100.0}
+{"epoch": 2, "acc1": 73.77, "acc5": 100.0, "best_acc1": 73.77, "best_acc5": 100.0}
+{"epoch": 3, "step": 200, "lr_backbone": 0, "lr_head": 0.01891006524188368, "loss": 0.6409890055656433, "time": 128}
+{"epoch": 3, "acc1": 71.95, "acc5": 100.0, "best_acc1": 73.77, "best_acc5": 100.0}
+{"epoch": 4, "acc1": 74.43, "acc5": 100.0, "best_acc1": 74.43, "best_acc5": 100.0}
+{"epoch": 5, "step": 300, "lr_backbone": 0, "lr_head": 0.017071067811865476, "loss": 0.4275101125240326, "time": 198}
+{"epoch": 5, "acc1": 69.52, "acc5": 100.0, "best_acc1": 74.43, "best_acc5": 100.0}
+{"epoch": 6, "step": 400, "lr_backbone": 0, "lr_head": 0.015877852522924733, "loss": 0.6096501350402832, "time": 244}
+{"epoch": 6, "acc1": 74.2, "acc5": 100.0, "best_acc1": 74.43, "best_acc5": 100.0}
+{"epoch": 7, "acc1": 74.82, "acc5": 100.0, "best_acc1": 74.82, "best_acc5": 100.0}
+{"epoch": 8, "step": 500, "lr_backbone": 0, "lr_head": 0.013090169943749477, "loss": 0.5067178010940552, "time": 315}
+{"epoch": 8, "acc1": 75.07, "acc5": 100.0, "best_acc1": 75.07, "best_acc5": 100.0}
+{"epoch": 9, "acc1": 74.68, "acc5": 100.0, "best_acc1": 75.07, "best_acc5": 100.0}
+{"epoch": 10, "step": 600, "lr_backbone": 0, "lr_head": 0.01, "loss": 0.48231154680252075, "time": 385}
+{"epoch": 10, "acc1": 76.21, "acc5": 100.0, "best_acc1": 76.21, "best_acc5": 100.0}
+{"epoch": 11, "step": 700, "lr_backbone": 0, "lr_head": 0.008435655349597695, "loss": 0.534207820892334, "time": 432}
+{"epoch": 11, "acc1": 73.82, "acc5": 100.0, "best_acc1": 76.21, "best_acc5": 100.0}
+{"epoch": 12, "acc1": 75.96, "acc5": 100.0, "best_acc1": 76.21, "best_acc5": 100.0}
+{"epoch": 13, "step": 800, "lr_backbone": 0, "lr_head": 0.005460095002604533, "loss": 0.46429243683815, "time": 502}
+{"epoch": 13, "acc1": 76.1, "acc5": 100.0, "best_acc1": 76.21, "best_acc5": 100.0}
+{"epoch": 14, "acc1": 76.07, "acc5": 100.0, "best_acc1": 76.21, "best_acc5": 100.0}
+{"epoch": 15, "step": 900, "lr_backbone": 0, "lr_head": 0.0029289321881345253, "loss": 0.4264830946922302, "time": 573}
+{"epoch": 15, "acc1": 76.46, "acc5": 100.0, "best_acc1": 76.46, "best_acc5": 100.0}
+{"epoch": 16, "step": 1000, "lr_backbone": 0, "lr_head": 0.0019098300562505265, "loss": 0.5439733862876892, "time": 619}
+{"epoch": 16, "acc1": 75.68, "acc5": 100.0, "best_acc1": 76.46, "best_acc5": 100.0}
+{"epoch": 17, "acc1": 75.9, "acc5": 100.0, "best_acc1": 76.46, "best_acc5": 100.0}
+{"epoch": 18, "step": 1100, "lr_backbone": 0, "lr_head": 0.0004894348370484647, "loss": 0.4801652431488037, "time": 690}
+{"epoch": 18, "acc1": 76.08, "acc5": 100.0, "best_acc1": 76.46, "best_acc5": 100.0}
+{"epoch": 19, "acc1": 76.45, "acc5": 100.0, "best_acc1": 76.46, "best_acc5": 100.0}
