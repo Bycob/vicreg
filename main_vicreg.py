@@ -102,7 +102,7 @@ def main(args):
     transforms = aug.TrainTransform()
     transforms2 = aug.MaskTransform()
 
-    dataset = datasets.ImageFolder(args.data_dir / "train", transforms)
+    dataset = datasets.ImageFolder(args.data_dir / "train", transforms2)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
@@ -167,7 +167,7 @@ def main(args):
             x = x.numpy()
             y = y.numpy()
 
-            cut = iaa.Cutout(nb_iterations=1)
+            cut = iaa.Cutout(nb_iterations=2)
             x = cut(images=x)
             y = cut(images=y)
 

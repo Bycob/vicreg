@@ -21,7 +21,7 @@ from torchvision import datasets, transforms
 import torch
 
 import resnet
-import lightweighted_resnet
+
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -138,9 +138,7 @@ def main_worker(gpu, args):
     torch.backends.cudnn.benchmark = True
 
     
-    #backbone, embedding = resnet.__dict__[args.arch](zero_init_residual=True)
-    backbone = lightweighted_resnet.light_resnet(zero_init_residual=True)
-    embedding = 1000
+    backbone, embedding = resnet.__dict__[args.arch](zero_init_residual=True)
     state_dict = torch.load(args.pretrained, map_location="cpu")
     missing_keys, unexpected_keys = backbone.load_state_dict(state_dict, strict=False)
     assert missing_keys == [] and unexpected_keys == []
