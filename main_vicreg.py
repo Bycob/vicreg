@@ -26,7 +26,7 @@ from imgaug.augmenters import arithmetic
 
 import augmentations as aug
 from distributed import init_distributed_mode
-import encoder
+
 
 import resnet
 import imgaug.augmenters as iaa
@@ -163,18 +163,18 @@ def main(args):
             x_masked = torch.einsum('hwcn->nchw', x_masked)
             y_masked = torch.einsum('hwcn->nchw', y_masked)"""
             x = torch.einsum('nchw->nhwc', x)
-            y = torch.einsum('nchw->nhwc', y)
+            #y = torch.einsum('nchw->nhwc', y)
             x = x.numpy()
-            y = y.numpy()
+            #y = y.numpy()
 
-            cut = iaa.Cutout(nb_iterations=2)
+            cut = iaa.Cutout(nb_iterations=50, size=0.1)
             x = cut(images=x)
-            y = cut(images=y)
+            #y = cut(images=y)
 
             x = torch.tensor(x)
-            y = torch.tensor(y)
+            #y = torch.tensor(y)
             x = torch.einsum('nhwc->nchw', x)
-            y = torch.einsum('nhwc->nchw', y)
+            #y = torch.einsum('nhwc->nchw', y)
             
             x = x.cuda(gpu, non_blocking=True)
             y = y.cuda(gpu, non_blocking=True)
@@ -386,3 +386,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser('VICReg training script', parents=[get_arguments()])
     args = parser.parse_args()
     main(args)
+
+    
