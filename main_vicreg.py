@@ -142,32 +142,12 @@ def main(args):
         sampler.set_epoch(epoch)
         for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
             #apply masking
-            """x_x1 = random.randint(0, 111)
-            x_y1 = random.randint(0, 111)
-            x_x2 = random.randint(113, 224)
-            x_y2 = random.randint(113, 224) coarsedropout
-            
-            x = torch.einsum('nchw->hwcn', x)
-            x_masked = arithmetic.cutout(x, x_x1, x_y1, x_x2, x_y2)
-            x_masked = torch.tensor(x_masked)
-            
-            y_x1 = random.randint(0, 111)
-            y_y1 = random.randint(0, 111)
-            y_x2 = random.randint(113, 224)
-            y_y2 = random.randint(113, 224)
-
-            y = torch.einsum('nchw->hwcn', y)
-            y_masked = arithmetic.cutout(y, y_x1, y_y1, y_x2, y_y2)
-            y_masked = torch.tensor(y_masked)
-
-            x_masked = torch.einsum('hwcn->nchw', x_masked)
-            y_masked = torch.einsum('hwcn->nchw', y_masked)"""
             x = torch.einsum('nchw->nhwc', x)
             #y = torch.einsum('nchw->nhwc', y)
             x = x.numpy()
             #y = y.numpy()
 
-            cut = iaa.Cutout(nb_iterations=50, size=0.1)
+            cut = iaa.Cutout(nb_iterations=50, size=0.01)
             x = cut(images=x)
             #y = cut(images=y)
 
