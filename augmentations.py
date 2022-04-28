@@ -87,3 +87,21 @@ class TrainTransform(object):
         x1 = self.transform(sample)
         x2 = self.transform_prime(sample)
         return x1, x2
+
+
+class MaskTransform(object):
+    def __init__(self):
+        self.transform = transforms.Compose(
+            [
+                transforms.RandomResizedCrop(224, interpolation=InterpolationMode.BICUBIC),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ]
+        )
+
+    def __call__(self, sample):
+        x = self.transform(sample)
+        y = self.transform(sample)
+
+        return x, y
+
