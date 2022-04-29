@@ -20,6 +20,10 @@ import resnet
 import imgaug.augmenters as iaa
 import imageio
 import imgaug
+import cv2
+
+import matplotlib
+matplotlib.use('Agg')
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -82,8 +86,10 @@ def main(args):
         print(" ".join(sys.argv), file=stats_file)
 
     transforms = aug.TrainTransform()
+    transforms2 = aug.MaskTransform()
+    unorm = UnNormalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
 
-    dataset = datasets.ImageFolder(args.data_dir / "train", transforms)
+    dataset = datasets.ImageFolder(args.data_dir / "train", transforms2)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
@@ -127,11 +133,6 @@ def main(args):
             x = torch.einsum('nchw->nhwc', x)
             x = x.numpy()
 
-            if (step % 200) == 0:
-                cells = [x[10]]                                                                                                                                                          
-                grid_image = imgaug.draw_grid(cells, cols=1)                                                                                                                                               
-                imageio.imwrite(str(epoch) + "_before.jpg", grid_image)
-
             cut = iaa.Cutout(nb_iterations=2)
             x = cut(images=x)
 
@@ -155,6 +156,10 @@ def main(args):
                 x2 = x.cpu()
                 out2 = out.cpu()
 
+                img2 = unorm(img2)
+                x2 = unorm(x2)
+                out2 = unorm(out2)
+                
                 img2 = torch.einsum('nchw->nhwc', img2)
                 x2 = torch.einsum('nchw->nhwc', x2)
                 out2 = torch.einsum('nchw->nhwc', out2)
@@ -162,11 +167,13 @@ def main(args):
                 img2 = img2.detach().numpy()
                 x2 = x2.detach().numpy()
                 out2 = out2.detach().numpy()
-                out2 = out2.astype(np.float32)
+                img2 = img2.astype(np.uint8)
+                x2 = x2.astype(np.uint8)
+                out2 = out2.astype(np.uint8)
                 
                 cells = [img2[4], x2[4], out2[4]]
                 grid_image = imgaug.draw_grid(cells, cols=3)
-                imageio.imwrite(str(epoch) + "_test.jpg", grid_image)
+                cv2.imwrite(str(epoch) + "_test.png", grid_image)
 
             current_time = time.time()
             if args.rank == 0 and current_time - last_logging > args.log_freq_time:
@@ -300,6 +307,19 @@ class LARS(optim.Optimizer):
 
                 p.add_(mu, alpha=-g["lr"])
 
+
+class UnNormalize(object):
+    def __init__(self, mean, std):
+        self.mean = mean
+        self.std = std
+
+    def __call__(self, tensor):
+        for t, m, s in zip(tensor, self.mean, self.std):
+            t = t.mul(s).add(m)
+            # The normalize code -> t.sub_(m).div_(s)
+        return tensor
+
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser('Autoencoder training script', parents=[get_arguments()])

@@ -95,6 +95,7 @@ class TrainTransform(object):
         return x1, x2
 
 
+<<<<<<< HEAD
     
 
 class Masking(object):
@@ -135,6 +136,8 @@ class Masking(object):
 
 
 
+=======
+>>>>>>> 7161fb259f067ce53d7788bc630f7ba9cba2f4a2
 class MaskTransform(object):
     def __init__(self):
         self.transform = transforms.Compose(
@@ -145,6 +148,7 @@ class MaskTransform(object):
             ]
         )
 
+<<<<<<< HEAD
         
     def __call__(self, sample):
         x = self.transform(sample)
@@ -152,4 +156,11 @@ class MaskTransform(object):
         
         return x, y
 
+=======
+    def __call__(self, sample):
+        x = self.transform(sample)
+        y = self.transform(sample)
+
+        return x, y
+>>>>>>> 7161fb259f067ce53d7788bc630f7ba9cba2f4a2
 
