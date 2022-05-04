@@ -22,6 +22,9 @@ import imageio
 import imgaug
 import cv2
 
+from ResDecoder import ResnetGenerator
+from real_denoising import Denoising_Autoencoder
+
 import matplotlib
 matplotlib.use('Agg')
 
@@ -101,16 +104,18 @@ def main(args):
         sampler=sampler,
     )
 
-    model = Denoising_Autoencoder(args).cuda(gpu)
+    model = ResnetGenerator(input_nc=3, output_nc=3).cuda(gpu)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
-    optimizer = LARS(
+    '''optimizer = LARS(
         model.parameters(),
         lr=0,
         weight_decay=args.wd,
         weight_decay_filter=exclude_bias_and_norm,
         lars_adaptation_filter=exclude_bias_and_norm,
-    )
+    )'''
+
+    optimizer = optim.SGD(model.parameters(), lr=0.1)
 
     if (args.exp_dir / "model.pth").is_file():
         if args.rank == 0:
@@ -133,7 +138,7 @@ def main(args):
             x = torch.einsum('nchw->nhwc', x)
             x = x.numpy()
 
-            cut = iaa.Cutout(nb_iterations=2)
+            cut = iaa.Cutout(nb_iterations=200, size=0.005)
             x = cut(images=x)
 
             x = torch.tensor(x)
@@ -146,7 +151,8 @@ def main(args):
 
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
-                loss, out = model.forward(x, img)
+                out = model.forward(x)
+                loss = F.mse_loss(out, img)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -214,24 +220,23 @@ def adjust_learning_rate(args, optimizer, loader, step):
         param_group["lr"] = lr
     return lr
 
-class Denoising_Autoencoder(nn.Module):
+class Denoising_Autoencoder_Res(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
         self.backbone, self.embedding = resnet.__dict__[args.arch](
             zero_init_residual=True
         )
-        self.decoder = Decoder(args, self.embedding)
+        self.decoder = Decoder(args)
 
     def forward(self, x, img):
         out = self.decoder(self.backbone(x))
-
         loss = F.mse_loss(out, img)
 
         return loss, out
 
 
-def Decoder(args, embedding):
+def Decoder(args):
     layers = []
     layers.append(nn.ConvTranspose2d(2048, 2048, kernel_size=7, stride=2, padding=0))
     layers.append(nn.SELU(True))
