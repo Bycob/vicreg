@@ -1,11 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-
-
-
 from pathlib import Path
 import argparse
 import json
@@ -13,31 +5,31 @@ import math
 import os
 import sys
 import time
-import random
+import numpy as np
 
 import torch
 import torch.nn.functional as F
 from torch import nn, optim
 import torch.distributed as dist
 import torchvision.datasets as datasets
+import torchvision.transforms as transforms
 
-import numpy.typing
-from imgaug.augmenters import arithmetic
+import imgaug.augmenters as iaa
+import imgaug
+import cv2
+
+import matplotlib
+matplotlib.use('Agg')
 
 import augmentations as aug
 from distributed import init_distributed_mode
 
-
 import resnet
-import imgaug.augmenters as iaa
-
+from encoder_decoder import ResnetEncoder, ResnetDecoder
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-<<<<<<< HEAD
-=======
 
->>>>>>> 1c368e230755f0648250d2903c2aad2eb000fd1e
 
 def get_arguments():
     parser = argparse.ArgumentParser(description="Pretrain a resnet model with VICReg", add_help=False)
@@ -76,6 +68,11 @@ def get_arguments():
     parser.add_argument("--cov-coeff", type=float, default=1.0,
                         help='Covariance regularization loss coefficient')
 
+    parser.add_argument("--vic-coeff", type=float, default=1.0,
+                        help='VICReg loss coefficient')
+    parser.add_argument("--dec-coeff", type=float, default=1.0,
+                        help='Decoder loss coefficeint')
+    
     # Running
     parser.add_argument("--num-workers", type=int, default=10)
     parser.add_argument('--device', default='cuda',
@@ -91,6 +88,18 @@ def get_arguments():
     return parser
 
 
+class UnNormalize(object):
+    def __init__(self, mean, std):
+        self.mean = mean
+        self.std = std
+
+    def __call__(self, tensor):
+        for t, m, s in zip(tensor, self.mean, self.std):
+            t = t.mul(s).add(m)
+            # The normalize code -> t.sub_(m).div_(s)
+        return tensor
+
+
 def main(args):
     torch.backends.cudnn.benchmark = True
     init_distributed_mode(args)
@@ -103,10 +112,17 @@ def main(args):
         print(" ".join(sys.argv))
         print(" ".join(sys.argv), file=stats_file)
 
-    transforms = aug.TrainTransform()
-    transforms2 = aug.MaskTransform()
+    transform = aug.TrainTransform()
+    transform2 = aug.MaskTransform()
+    unorm = UnNormalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+    invTrans = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. ],
+                                                     std = [ 1/0.229, 1/0.224, 1/0.225 ]),
+                                transforms.Normalize(mean = [ -0.485, -0.456, -0.406 ],
+                                                     std = [ 1., 1., 1. ]),
+                               ])
 
-    dataset = datasets.ImageFolder(args.data_dir / "train", transforms2)
+
+    dataset = datasets.ImageFolder(args.data_dir / "train", transform2)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
@@ -117,7 +133,6 @@ def main(args):
         pin_memory=True,
         sampler=sampler,
     )
-
 
     model = VICReg(args).cuda(gpu)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -145,29 +160,26 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         sampler.set_epoch(epoch)
         for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
-            #apply masking
-            x = torch.einsum('nchw->nhwc', x)
-            #y = torch.einsum('nchw->nhwc', y)
-            x = x.numpy()
-            #y = y.numpy()
+            img = x
 
-            cut = iaa.Cutout(nb_iterations=50, size=0.01)
+            x = torch.einsum('nchw->nhwc', x)
+            x = x.numpy()
+
+            cut = iaa.Cutout(nb_iterations=1, size=0.3)
             x = cut(images=x)
-            #y = cut(images=y)
 
             x = torch.tensor(x)
-            #y = torch.tensor(y)
             x = torch.einsum('nhwc->nchw', x)
-            #y = torch.einsum('nhwc->nchw', y)
-            
+
             x = x.cuda(gpu, non_blocking=True)
+            img = img.cuda(gpu, non_blocking=True)
             y = y.cuda(gpu, non_blocking=True)
-        
+
             lr = adjust_learning_rate(args, optimizer, loader, step)
 
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
-                loss = model.forward(x, y)
+                out, loss = model.forward(x, y)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -211,30 +223,42 @@ def adjust_learning_rate(args, optimizer, loader, step):
         param_group["lr"] = lr
     return lr
 
+class VICDecoder(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.num_features = int(args.mlp.split("-")[-1])
+        self.backbone = VICReg(args)
+        self.decoder = ResnetDecoder(input_nc=3, output_nc=3)
+        self.vic_coeff = args.vic_coeff
+        self.dec_coeff = args.dec_coeff
+
+    def forward(self, x, y, img):
+        out, vicreg_loss = self.backbone(x, y)
+        out = self.decoder(out)
+
+        decoder_loss = F.mse_loss(out, img)
+
+        loss = self.vic_coeff*vicreg_loss + self.dec_coeff*decoder_loss
+
+        return out, loss, decoder_loss
+        
+
 
 class VICReg(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
         self.num_features = int(args.mlp.split("-")[-1])
-        self.backbone, self.embedding = resnet.__dict__[args.arch](zero_init_residual=True)
-        #self.backbone = encoder.ResnetEncoder(input_nc=3, output_nc=3)
-        #self.embedding = 56
-                
-        self.projector = Projector(args, self.embedding)
+        self.backbone = ResnetEncoder(input_nc=3, output_nc=3)
+        self.projector = Projector(args)
 
     def forward(self, x, y):
-        print(self.backbone)
         x = self.backbone(x)
-        print(x.shape
-        #x = x.squeeze()
-        print(x.shape)
-        print(self.projector)
+        out = x
         x = self.projector(x)
-        #x = self.projector(self.backbone(x))
-        print(x.shape)
-        y = self.projector(self.backbone(y).squeeze())
-        print(stop)
+        y = self.projector(self.backbone(y))
+
         repr_loss = F.mse_loss(x, y)
 
         x = torch.cat(FullGatherLayer.apply(x), dim=0)
@@ -246,7 +270,7 @@ class VICReg(nn.Module):
         std_y = torch.sqrt(y.var(dim=0) + 0.0001)
         std_loss = torch.mean(F.relu(1 - std_x)) / 2 + torch.mean(F.relu(1 - std_y)) / 2
 
-        cov_x = (x.T @ x) / (self.args.batch_size - 1) #torch.transpose(x, 2, 3)
+        cov_x = (x.T @ x) / (self.args.batch_size - 1)
         cov_y = (y.T @ y) / (self.args.batch_size - 1)
         cov_loss = off_diagonal(cov_x).pow_(2).sum().div(
             self.num_features
@@ -257,19 +281,36 @@ class VICReg(nn.Module):
             + self.args.std_coeff * std_loss
             + self.args.cov_coeff * cov_loss
         )
-        return loss
+        return out, loss
 
 
-def Projector(args, embedding):
-    mlp_spec = f"{embedding}-{args.mlp}"
-    layers = []
-    f = list(map(int, mlp_spec.split("-")))
-    for i in range(len(f) - 2):
-        layers.append(nn.Linear(f[i], f[i + 1]))
-        layers.append(nn.BatchNorm1d(f[i + 1]))
-        layers.append(nn.ReLU(True))
-    layers.append(nn.Linear(f[-2], f[-1], bias=False))
-    return nn.Sequential(*layers)
+class Projector(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        embedding=256
+        mlp_spec = f"{embedding}-{args.mlp}"
+        f = list(map(int, mlp_spec.split("-")))
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.linear1 = nn.Linear(f[0], f[1])
+        self.bn1 = nn.BatchNorm1d(f[1])
+        self.relu = nn.ReLU(True)
+        self.linear2 = nn.Linear(f[1], f[2])
+        self.bn2 = nn.BatchNorm1d(f[2])
+        self.linear3 = nn.Linear(f[2], f[3], bias=False)
+
+    def forward(self, x):
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        
+        x = self.linear1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        x = self.bn2(x)
+        x = self.relu(x)
+        x = self.linear3(x)
+        
+        return x
 
 
 def exclude_bias_and_norm(p):
@@ -278,10 +319,8 @@ def exclude_bias_and_norm(p):
 
 def off_diagonal(x):
     n, m = x.shape
-    #a, b, n, m = x.shape
     assert n == m
     return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
-    #return x.flatten(start_dim=2)[:, :, :-1].view(a, b, n - 1, n + 1)[:, :, :, 1:].flatten()
 
 
 class LARS(optim.Optimizer):
@@ -363,8 +402,8 @@ class FullGatherLayer(torch.autograd.Function):
         all_gradients = torch.stack(grads)
         dist.all_reduce(all_gradients)
         return all_gradients[dist.get_rank()]
-
-
+    
+    
 def handle_sigusr1(signum, frame):
     os.system(f'scontrol requeue {os.environ["SLURM_JOB_ID"]}')
     exit()
@@ -378,5 +417,3 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser('VICReg training script', parents=[get_arguments()])
     args = parser.parse_args()
     main(args)
-
-    

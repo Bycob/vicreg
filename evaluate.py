@@ -21,7 +21,10 @@ from torchvision import datasets, transforms
 import torch
 
 import resnet
+from encoder_decoder import ResnetEncoder
 
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -137,21 +140,39 @@ def main_worker(gpu, args):
     torch.cuda.set_device(gpu)
     torch.backends.cudnn.benchmark = True
 
-    
-    backbone, embedding = resnet.__dict__[args.arch](zero_init_residual=True)
+    backbone = ResnetEncoder(input_nc=3, output_nc=3)
+    #backbone, embedding = resnet.__dict__[args.arch](zero_init_residual=True)
     state_dict = torch.load(args.pretrained, map_location="cpu")
-    if "model" in state_dict:
-        state_dict = state_dict["model"]
-        state_dict = {
-            key.replace("module.backbone.", ""): value
-            for (key, value) in state_dict.items()
-        }
-    backbone.load_state_dict(state_dict, strict=False)
+    missing_keys, unexpected_keys = backbone.load_state_dict(state_dict, strict=False)
+    assert missing_keys == [] and unexpected_keys == []
+    #if "model" in state_dict:
+    #    state_dict = state_dict["model"]
+    #    state_dict = {
+    #        key.replace("module.backbone.", ""): value
+    #        for (key, value) in state_dict.items()
+    #    }
+    #backbone.load_state_dict(state_dict, strict=False)
 
-    head = nn.Linear(embedding, 1000)
+    head = nn.Linear(256, 1000)
     head.weight.data.normal_(mean=0.0, std=0.01)
     head.bias.data.zero_()
-    model = nn.Sequential(backbone, head)
+
+
+    class Model(nn.Module):
+        def __init__(self, backbone):
+            super().__init__()
+            self.backbone = backbone
+            self.avgpool = nn.AdaptiveAvgPool2d((1,1))
+
+        def forward(self, x):
+            x = backbone(x)
+            x = self.avgpool(x)
+            x = torch.flatten(x, 1)
+
+            return x
+        
+    bbone = Model(backbone)
+    model = nn.Sequential(bbone, head)
     model.cuda(gpu)
 
     if args.weights == "freeze":
@@ -212,7 +233,6 @@ def main_worker(gpu, args):
             ]
         ),
     )
-
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     kwargs = dict(
