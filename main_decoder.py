@@ -179,7 +179,7 @@ def main(args):
 
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
-                out, loss = model.forward(x, y, img)
+                out, loss, decoder_loss = model.forward(x, y, img)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -211,6 +211,7 @@ def main(args):
                     epoch=epoch,
                     step=step,
                     loss=loss.item(),
+                    decoder_loss=decoder_loss.item(),
                     time=int(current_time - start_time),
                     lr=lr,
                 )
@@ -262,7 +263,7 @@ class VICDecoder(nn.Module):
 
         loss = self.vic_coeff*vicreg_loss + self.dec_coeff*decoder_loss
 
-        return out, loss
+        return out, loss, decoder_loss
         
 
 
