@@ -147,7 +147,7 @@ def main(args):
             x = x.numpy()
             #y = y.numpy()
 
-            cut = iaa.Cutout(nb_iterations=50, size=0.01)
+            cut = iaa.Cutout(nb_iterations=1, size=0.3)
             x = cut(images=x)
             #y = cut(images=y)
 
