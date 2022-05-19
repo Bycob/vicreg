@@ -1,0 +1,22 @@
+vicreg/evaluate.py --data-dir /data1/jeanne/datasets/dogs_cats/ --pretrained vic_encoder/resnet50.pth --lr-head 0.02 --epochs 20 --train-perc zero1
+{"epoch": 0, "step": 0, "lr_backbone": 0, "lr_head": 0.02, "loss": 6.91431188583374, "time": 1}
+{"epoch": 0, "acc1": 56.99, "acc5": 100.0, "best_acc1": 56.99, "best_acc5": 100.0}
+{"epoch": 1, "acc1": 55.17, "acc5": 100.0, "best_acc1": 56.99, "best_acc5": 100.0}
+{"epoch": 2, "acc1": 54.62, "acc5": 100.0, "best_acc1": 56.99, "best_acc5": 100.0}
+{"epoch": 3, "acc1": 60.01, "acc5": 100.0, "best_acc1": 60.01, "best_acc5": 100.0}
+{"epoch": 4, "acc1": 61.28, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 5, "acc1": 61.12, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 6, "acc1": 60.38, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 7, "acc1": 60.1, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 8, "acc1": 60.55, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 9, "acc1": 61.01, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 10, "acc1": 61.0, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 11, "acc1": 61.03, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 12, "acc1": 60.91, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 13, "acc1": 60.98, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 14, "acc1": 60.96, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 15, "acc1": 60.99, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 16, "acc1": 61.0, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 17, "acc1": 60.97, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 18, "acc1": 61.01, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
+{"epoch": 19, "acc1": 60.98, "acc5": 100.0, "best_acc1": 61.28, "best_acc5": 100.0}
