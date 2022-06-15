@@ -18,9 +18,6 @@ import imgaug.augmenters as iaa
 import imgaug
 import cv2
 
-import matplotlib
-matplotlib.use('Agg')
-
 import augmentations as aug
 from distributed import init_distributed_mode
 

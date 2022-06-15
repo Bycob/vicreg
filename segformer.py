@@ -29,10 +29,15 @@ from mmcv.utils import Registry
 import segformer_config_b5
 import segformer_config_b0
 import EncoderDecoder
+import builder
+import mit
+import segformer_head
+import cross_entropy_loss
+
 from EncoderDecoder import build_segmentor
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 
 def get_arguments():
@@ -138,7 +143,7 @@ def main(args):
 
     model = VICDecoder(args, net=net).cuda(gpu)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=True)
     optimizer = LARS(
         model.parameters(),
         lr=0,
@@ -186,7 +191,7 @@ def main(args):
             scaler.step(optimizer)
             scaler.update()
 
-            if (step % 200) == 0:
+            """if (step % 200) == 0:
                 #img = invTrans(img).cpu()
                 #x = invTrans(x).cpu()
                 #out = invTrans(out).cpu()
@@ -205,7 +210,7 @@ def main(args):
                 
                 cells = [img[4], x[4], out[4]]
                 grid_image = imgaug.draw_grid(cells, cols=3)
-                cv2.imwrite(str(epoch) + "_test.png", grid_image)
+                cv2.imwrite(str(epoch) + "_test.png", grid_image)"""
 
             current_time = time.time()
             if args.rank == 0 and current_time - last_logging > args.log_freq_time:
@@ -259,7 +264,7 @@ class VICDecoder(nn.Module):
     def forward(self, x, y, img):
         out, vicreg_loss = self.backbone(x, y)
         #out = self.decoder(out)
-        
+
         #decoder_loss = F.mse_loss(out, img)
 
         loss = self.vic_coeff*vicreg_loss #+ self.dec_coeff*decoder_loss
@@ -274,17 +279,19 @@ class VICReg(nn.Module):
         self.args = args
         self.num_features = int(args.mlp.split("-")[-1])
         #self.backbone = ResnetEncoder(input_nc=3, output_nc=3)
-        #self.projector = Projector(args)
+        self.projector = Projector(args)
         self.backbone = net.backbone
+        self.net = net
         
     def forward(self, x, y):
         #x = self.backbone(x)
         #out = x
         #x = self.projector(x)
         #y = self.projector(self.backbone(y))
-        x = net.extract_feat(x)
+        x = self.net.extract_feat(x)[-1]
         out = x
-        y = net.extract_feat(y)
+        x = self.projector(x)
+        y = self.projector(self.net.extract_feat(y)[-1])
         
         repr_loss = F.mse_loss(x, y)
 
@@ -314,7 +321,7 @@ class VICReg(nn.Module):
 class Projector(nn.Module):
     def __init__(self, args):
         super().__init__()
-        embedding=256
+        embedding = 512
         mlp_spec = f"{embedding}-{args.mlp}"
         f = list(map(int, mlp_spec.split("-")))
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -336,7 +343,7 @@ class Projector(nn.Module):
         x = self.bn2(x)
         x = self.relu(x)
         x = self.linear3(x)
-        
+    
         return x
 
 

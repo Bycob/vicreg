@@ -16,15 +16,35 @@ import sys
 import time
 import urllib
 
+import numpy as np
 from torch import nn, optim
 from torchvision import datasets, transforms
 import torch
 
 import resnet
 from encoder_decoder import ResnetEncoder
+from visdom import Visdom
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
+class VisdomLinePlotter(object):
+    """Plots to Visdom"""
+    def __init__(self, env_name='main'):
+        self.viz = Visdom(port=8098)
+        self.env = env_name
+        self.plots = {}
+    def plot(self, var_name, split_name, title_name, x, y):
+        if var_name not in self.plots:
+            self.plots[var_name] = self.viz.line(X=np.array([x,x]), Y=np.array([y,y]), env=self.env, opts=dict(
+                legend=[split_name],
+                title=title_name,
+                xlabel='Epochs',
+                ylabel=var_name
+            ))
+        else:
+            self.viz.line(X=np.array([x]), Y=np.array([y]), env=self.env, win=self.plots[var_name], name=split_name, update = 'append')
+
 
 def get_arguments():
     parser = argparse.ArgumentParser(
@@ -120,6 +140,9 @@ def main():
 
 
 def main_worker(gpu, args):
+
+    plotter = VisdomLinePlotter(env_name='env_test')
+    
     args.rank += gpu
     torch.distributed.init_process_group(
         backend="nccl",
@@ -243,6 +266,7 @@ def main_worker(gpu, args):
     )
     val_loader = torch.utils.data.DataLoader(val_dataset, **kwargs)
 
+    
     start_time = time.time()
     for epoch in range(start_epoch, args.epochs):
         # train
@@ -277,6 +301,7 @@ def main_worker(gpu, args):
                     )
                     print(json.dumps(stats))
                     print(json.dumps(stats), file=stats_file)
+        plotter.plot('loss', 'val', 'Class Loss', loss.item(), epoch)
 
         # evaluate
         model.eval()
@@ -300,6 +325,8 @@ def main_worker(gpu, args):
                 best_acc1=best_acc.top1,
                 best_acc5=best_acc.top5,
             )
+            acc = top1.avg
+            plotter.plot('acc', 'val', 'Class Accuracy', acc, epoch)
             print(json.dumps(stats))
             print(json.dumps(stats), file=stats_file)
 
@@ -313,6 +340,7 @@ def main_worker(gpu, args):
                 scheduler=scheduler.state_dict(),
             )
             torch.save(state, args.exp_dir / "checkpoint.pth")
+
 
 
 def handle_sigusr1(signum, frame):
