@@ -17,15 +17,27 @@ import torchvision.transforms as transforms
 import imgaug.augmenters as iaa
 import imgaug
 import cv2
+import mmcv
 
 import augmentations as aug
 from distributed import init_distributed_mode
 
 import resnet
 from encoder_decoder import ResnetEncoder, ResnetDecoder
+from mmcv.cnn import MODELS as MMCV_MODELS
+from mmcv.utils import Registry
+import segformer_config_b5
+import segformer_config_b0
+import EncoderDecoder
+import builder
+import mit
+import segformer_head
+import cross_entropy_loss
+
+from EncoderDecoder import build_segmentor
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 
 def get_arguments():
@@ -85,17 +97,6 @@ def get_arguments():
     return parser
 
 
-class UnNormalize(object):
-    def __init__(self, mean, std):
-        self.mean = mean
-        self.std = std
-
-    def __call__(self, tensor):
-        for t, m, s in zip(tensor, self.mean, self.std):
-            t = t.mul(s).add(m)
-            # The normalize code -> t.sub_(m).div_(s)
-        return tensor
-
 
 def main(args):
     torch.backends.cudnn.benchmark = True
@@ -111,7 +112,6 @@ def main(args):
 
     transform = aug.TrainTransform()
     transform2 = aug.MaskTransform()
-    unorm = UnNormalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
     invTrans = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. ],
                                                      std = [ 1/0.229, 1/0.224, 1/0.225 ]),
                                 transforms.Normalize(mean = [ -0.485, -0.456, -0.406 ],
@@ -131,9 +131,19 @@ def main(args):
         sampler=sampler,
     )
 
-    model = VICDecoder(args).cuda(gpu)
+    cfg = mmcv.Config.fromfile(os.path.join("vicreg", "segformer_config_b5.py"))
+    cfg.model.pretrained = None
+    cfg.model.train_cfg = None
+    cfg.model.decode_head.num_classes = 10
+    #cfg = segformer_config_b5
+    
+    net = build_segmentor(
+            cfg.model, train_cfg=None, test_cfg=cfg.get("test_cfg")
+        )
+
+    model = VICDecoder(args, net=net).cuda(gpu)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=True)
     optimizer = LARS(
         model.parameters(),
         lr=0,
@@ -176,12 +186,12 @@ def main(args):
 
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
-                out, loss, decoder_loss = model.forward(x, y, img)
+                out, loss = model.forward(x, y, img)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
 
-            if (step % 200) == 0:
+            """if (step % 200) == 0:
                 #img = invTrans(img).cpu()
                 #x = invTrans(x).cpu()
                 #out = invTrans(out).cpu()
@@ -200,7 +210,7 @@ def main(args):
                 
                 cells = [img[4], x[4], out[4]]
                 grid_image = imgaug.draw_grid(cells, cols=3)
-                cv2.imwrite(str(epoch) + "_test.png", grid_image)
+                cv2.imwrite(str(epoch) + "_test.png", grid_image)"""
 
             current_time = time.time()
             if args.rank == 0 and current_time - last_logging > args.log_freq_time:
@@ -208,7 +218,6 @@ def main(args):
                     epoch=epoch,
                     step=step,
                     loss=loss.item(),
-                    decoder_loss=decoder_loss.item(),
                     time=int(current_time - start_time),
                     lr=lr,
                 )
@@ -243,41 +252,47 @@ def adjust_learning_rate(args, optimizer, loader, step):
     return lr
 
 class VICDecoder(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, net):
         super().__init__()
         self.args = args
         self.num_features = int(args.mlp.split("-")[-1])
-        self.backbone = VICReg(args)
-        self.decoder = ResnetDecoder(input_nc=3, output_nc=3)
+        self.backbone = VICReg(args, net)
+        #self.decoder = ResnetDecoder(input_nc=3, output_nc=3)
         self.vic_coeff = args.vic_coeff
         self.dec_coeff = args.dec_coeff
 
     def forward(self, x, y, img):
         out, vicreg_loss = self.backbone(x, y)
-        out = self.decoder(out)
+        #out = self.decoder(out)
 
-        decoder_loss = F.mse_loss(out, img)
+        #decoder_loss = F.mse_loss(out, img)
 
-        loss = self.vic_coeff*vicreg_loss + self.dec_coeff*decoder_loss
+        loss = self.vic_coeff*vicreg_loss #+ self.dec_coeff*decoder_loss
 
-        return out, loss, decoder_loss
+        return out, loss#, decoder_loss
         
 
 
 class VICReg(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, net):
         super().__init__()
         self.args = args
         self.num_features = int(args.mlp.split("-")[-1])
-        self.backbone = ResnetEncoder(input_nc=3, output_nc=3)
+        #self.backbone = ResnetEncoder(input_nc=3, output_nc=3)
         self.projector = Projector(args)
-
+        self.backbone = net.backbone
+        self.net = net
+        
     def forward(self, x, y):
-        x = self.backbone(x)
+        #x = self.backbone(x)
+        #out = x
+        #x = self.projector(x)
+        #y = self.projector(self.backbone(y))
+        x = self.net.extract_feat(x)[-1]
         out = x
         x = self.projector(x)
-        y = self.projector(self.backbone(y))
-
+        y = self.projector(self.net.extract_feat(y)[-1])
+        
         repr_loss = F.mse_loss(x, y)
 
         x = torch.cat(FullGatherLayer.apply(x), dim=0)
@@ -306,7 +321,7 @@ class VICReg(nn.Module):
 class Projector(nn.Module):
     def __init__(self, args):
         super().__init__()
-        embedding=256
+        embedding = 512
         mlp_spec = f"{embedding}-{args.mlp}"
         f = list(map(int, mlp_spec.split("-")))
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -328,7 +343,7 @@ class Projector(nn.Module):
         x = self.bn2(x)
         x = self.relu(x)
         x = self.linear3(x)
-        
+    
         return x
 
 
