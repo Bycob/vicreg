@@ -53,6 +53,9 @@ class VisdomLinePlotter(object):
             self.viz.line(X=np.array([x]), Y=np.array([y]), env=self.env, win=self.plots[var_name], name=split_name, update = 'append')
 
 
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 def get_arguments():
     parser = argparse.ArgumentParser(
         description="Evaluate a pretrained model on ImageNet"
@@ -270,7 +273,6 @@ def main_worker(gpu, args):
         ),
     )
 
-    
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     kwargs = dict(
         batch_size=args.batch_size // args.world_size,

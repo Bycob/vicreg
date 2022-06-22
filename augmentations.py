@@ -8,7 +8,11 @@
 from PIL import ImageOps, ImageFilter
 import numpy as np
 import torchvision.transforms as transforms
-from torchvision.transforms import InterpolationMode
+from torchvision.transforms.functional import InterpolationMode
+import torch.nn as nn
+import torch
+from timm.models.vision_transformer import PatchEmbed
+
 
 
 class GaussianBlur(object):
@@ -23,6 +27,7 @@ class GaussianBlur(object):
             return img
 
 
+        
 class Solarization(object):
     def __init__(self, p):
         self.p = p
@@ -33,6 +38,7 @@ class Solarization(object):
         else:
             return img
 
+        
 
 class TrainTransform(object):
     def __init__(self):
@@ -89,6 +95,7 @@ class TrainTransform(object):
         return x1, x2
 
 
+    
 class MaskTransform(object):
     def __init__(self):
         self.transform = transforms.Compose(
@@ -99,9 +106,10 @@ class MaskTransform(object):
             ]
         )
 
+        
     def __call__(self, sample):
         x = self.transform(sample)
         y = self.transform(sample)
-
+        
         return x, y
 

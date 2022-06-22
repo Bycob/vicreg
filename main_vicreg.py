@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 
+
 from pathlib import Path
 import argparse
 import json
@@ -12,6 +13,7 @@ import math
 import os
 import sys
 import time
+import random
 
 import torch
 import torch.nn.functional as F
@@ -19,14 +21,23 @@ from torch import nn, optim
 import torch.distributed as dist
 import torchvision.datasets as datasets
 
+import numpy.typing
+from imgaug.augmenters import arithmetic
+
 import augmentations as aug
 from distributed import init_distributed_mode
 
+
 import resnet
+import imgaug.augmenters as iaa
+
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+<<<<<<< HEAD
+=======
 
+>>>>>>> 1c368e230755f0648250d2903c2aad2eb000fd1e
 
 def get_arguments():
     parser = argparse.ArgumentParser(description="Pretrain a resnet model with VICReg", add_help=False)
@@ -93,8 +104,9 @@ def main(args):
         print(" ".join(sys.argv), file=stats_file)
 
     transforms = aug.TrainTransform()
+    transforms2 = aug.MaskTransform()
 
-    dataset = datasets.ImageFolder(args.data_dir / "train", transforms)
+    dataset = datasets.ImageFolder(args.data_dir / "train", transforms2)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
@@ -105,6 +117,7 @@ def main(args):
         pin_memory=True,
         sampler=sampler,
     )
+
 
     model = VICReg(args).cuda(gpu)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -132,6 +145,21 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         sampler.set_epoch(epoch)
         for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
+            #apply masking
+            x = torch.einsum('nchw->nhwc', x)
+            #y = torch.einsum('nchw->nhwc', y)
+            x = x.numpy()
+            #y = y.numpy()
+
+            cut = iaa.Cutout(nb_iterations=50, size=0.01)
+            x = cut(images=x)
+            #y = cut(images=y)
+
+            x = torch.tensor(x)
+            #y = torch.tensor(y)
+            x = torch.einsum('nhwc->nchw', x)
+            #y = torch.einsum('nhwc->nchw', y)
+            
             x = x.cuda(gpu, non_blocking=True)
             y = y.cuda(gpu, non_blocking=True)
         
@@ -189,9 +217,10 @@ class VICReg(nn.Module):
         super().__init__()
         self.args = args
         self.num_features = int(args.mlp.split("-")[-1])
-        self.backbone, self.embedding = resnet.__dict__[args.arch](
-            zero_init_residual=True
-        )
+        self.backbone, self.embedding = resnet.__dict__[args.arch](zero_init_residual=True)
+        #self.backbone = encoder.ResnetEncoder(input_nc=3, output_nc=3)
+        #self.embedding = 56
+                
         self.projector = Projector(args, self.embedding)
 
     def forward(self, x, y):
@@ -217,7 +246,7 @@ class VICReg(nn.Module):
         std_y = torch.sqrt(y.var(dim=0) + 0.0001)
         std_loss = torch.mean(F.relu(1 - std_x)) / 2 + torch.mean(F.relu(1 - std_y)) / 2
 
-        cov_x = (x.T @ x) / (self.args.batch_size - 1)
+        cov_x = (x.T @ x) / (self.args.batch_size - 1) #torch.transpose(x, 2, 3)
         cov_y = (y.T @ y) / (self.args.batch_size - 1)
         cov_loss = off_diagonal(cov_x).pow_(2).sum().div(
             self.num_features
@@ -249,8 +278,10 @@ def exclude_bias_and_norm(p):
 
 def off_diagonal(x):
     n, m = x.shape
+    #a, b, n, m = x.shape
     assert n == m
     return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
+    #return x.flatten(start_dim=2)[:, :, :-1].view(a, b, n - 1, n + 1)[:, :, :, 1:].flatten()
 
 
 class LARS(optim.Optimizer):
@@ -347,3 +378,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser('VICReg training script', parents=[get_arguments()])
     args = parser.parse_args()
     main(args)
+
+    
