@@ -131,7 +131,7 @@ def main(args):
         sampler=sampler,
     )
 
-    cfg = mmcv.Config.fromfile(os.path.join("vicreg", "segformer_config_b5.py"))
+    cfg = mmcv.Config.fromfile(os.path.join("vicreg", "segformer_config_b0.py"))
     cfg.model.pretrained = None
     cfg.model.train_cfg = None
     cfg.model.decode_head.num_classes = 10
@@ -321,7 +321,7 @@ class VICReg(nn.Module):
 class Projector(nn.Module):
     def __init__(self, args):
         super().__init__()
-        embedding = 512
+        embedding = 256
         mlp_spec = f"{embedding}-{args.mlp}"
         f = list(map(int, mlp_spec.split("-")))
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))

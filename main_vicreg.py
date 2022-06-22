@@ -34,10 +34,8 @@ import imgaug.augmenters as iaa
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-<<<<<<< HEAD
-=======
 
->>>>>>> 1c368e230755f0648250d2903c2aad2eb000fd1e
+
 
 def get_arguments():
     parser = argparse.ArgumentParser(description="Pretrain a resnet model with VICReg", add_help=False)
