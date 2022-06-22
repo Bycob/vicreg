@@ -56,8 +56,8 @@ def get_arguments():
     # Model
     parser.add_argument("--arch", type=str, default="resnet50",
                         help='Architecture of the backbone encoder network')
-    parser.add_argument("--mlp", default="8192-8192-8192",
-                        help='Size and number of layers of the MLP expander head')
+    parser.add_argument("--embedding", default="256",
+                        help='Size of the embedding')
 
     # Optim
     parser.add_argument("--epochs", type=int, default=100,
@@ -135,7 +135,6 @@ def main(args):
     cfg.model.pretrained = None
     cfg.model.train_cfg = None
     cfg.model.decode_head.num_classes = 10
-    #cfg = segformer_config_b5
     
     net = build_segmentor(
             cfg.model, train_cfg=None, test_cfg=cfg.get("test_cfg")
@@ -232,7 +231,7 @@ def main(args):
             )
             torch.save(state, args.exp_dir / "model.pth")
     if args.rank == 0:
-        torch.save(model.module.backbone.backbone.state_dict(), args.exp_dir / "resnet50.pth")
+        torch.save(model.module.backbone.backbone.state_dict(), args.exp_dir / "segformer.pth")
 
 
 def adjust_learning_rate(args, optimizer, loader, step):
@@ -321,8 +320,8 @@ class VICReg(nn.Module):
 class Projector(nn.Module):
     def __init__(self, args):
         super().__init__()
-        embedding = 256
-        mlp_spec = f"{embedding}-{args.mlp}"
+        mlp = 4096
+        mlp_spec = f"{args.embedding}-{mlp}-{mlp]-{mlp]"
         f = list(map(int, mlp_spec.split("-")))
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.linear1 = nn.Linear(f[0], f[1])
