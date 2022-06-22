@@ -25,6 +25,13 @@ import resnet
 from encoder_decoder import ResnetEncoder
 from visdom import Visdom
 
+from EncoderDecoder import build_segmentor
+import mmcv
+import mit
+import segformer_head
+import cross_entropy_loss
+
+
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
@@ -160,7 +167,15 @@ def main_worker(gpu, args):
     torch.cuda.set_device(gpu)
     torch.backends.cudnn.benchmark = True
 
-    backbone = ResnetEncoder(input_nc=3, output_nc=3)
+    cfg = mmcv.Config.fromfile(os.path.join("vicreg", "segformer_config_b5.py"))
+    cfg.model.pretrained = None
+    cfg.model.train_cfg = None
+    cfg.model.decode_head.num_classes = 10
+    net = build_segmentor(
+            cfg.model, train_cfg=None, test_cfg=cfg.get("test_cfg")
+        )
+    backbone = net.backbone
+    #backbone = ResnetEncoder(input_nc=3, output_nc=3)
     #backbone, embedding = resnet.__dict__[args.arch](zero_init_residual=True)
     state_dict = torch.load(args.pretrained, map_location="cpu")
     missing_keys, unexpected_keys = backbone.load_state_dict(state_dict, strict=False)
@@ -173,7 +188,7 @@ def main_worker(gpu, args):
     #    }
     #backbone.load_state_dict(state_dict, strict=False)
 
-    head = nn.Linear(256, 1000)
+    head = nn.Linear(512, 1000)
     head.weight.data.normal_(mean=0.0, std=0.01)
     head.bias.data.zero_()
 
@@ -186,6 +201,7 @@ def main_worker(gpu, args):
 
         def forward(self, x):
             x = backbone(x)
+            x = x[-1]
             x = self.avgpool(x)
             x = torch.flatten(x, 1)
 
