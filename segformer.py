@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import numpy as np
+from visdom import Visdom
 
 import torch
 import torch.nn.functional as F
@@ -38,6 +39,23 @@ from EncoderDecoder import build_segmentor
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+
+class VisdomLinePlotter(object):
+    """Plots to Visdom"""
+    def __init__(self, env_name='main'):
+        self.viz = Visdom(port=8098)
+        self.env = env_name
+        self.plots = {}
+    def plot(self, var_name, split_name, title_name, x, y):
+        if var_name not in self.plots:
+            self.plots[var_name] = self.viz.line(X=np.array([x,x]), Y=np.array([y,y]), env=self.env, opts=dict(
+                legend=[split_name],
+                title=title_name,
+                xlabel='Time',
+                ylabel=var_name
+            ))
+        else:
+            self.viz.line(X=np.array([x]), Y=np.array([y]), env=self.env, win=self.plots[var_name], name=split_name, update = 'append')
 
 
 def get_arguments():
@@ -99,6 +117,8 @@ def get_arguments():
 
 
 def main(args):
+    plotter = VisdomLinePlotter(env_name='env_test')
+    
     torch.backends.cudnn.benchmark = True
     init_distributed_mode(args)
     print(args)
@@ -119,7 +139,8 @@ def main(args):
                                ])
 
 
-    dataset = datasets.ImageFolder(args.data_dir / "train", transform2)
+    #dataset = datasets.ImageFolder(args.data_dir / "train", transform2)
+    dataset = datasets.ImageFolder(args.data_dir, transform2)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
@@ -131,7 +152,7 @@ def main(args):
         sampler=sampler,
     )
 
-    cfg = mmcv.Config.fromfile(os.path.join("vicreg", "segformer_config_b0.py"))
+    cfg = mmcv.Config.fromfile(os.path.join("vicreg", "".join(("segformer_config_", args.arch, ".py"))))
     cfg.model.pretrained = None
     cfg.model.train_cfg = None
     cfg.model.decode_head.num_classes = 10
@@ -223,6 +244,8 @@ def main(args):
                 print(json.dumps(stats))
                 print(json.dumps(stats), file=stats_file)
                 last_logging = current_time
+                plotter.plot('loss', 'val', 'Class Loss', int(current_time - start_time), loss.item())
+        
         if args.rank == 0:
             state = dict(
                 epoch=epoch + 1,
@@ -254,7 +277,6 @@ class VICDecoder(nn.Module):
     def __init__(self, args, net):
         super().__init__()
         self.args = args
-        self.num_features = int(args.mlp.split("-")[-1])
         self.backbone = VICReg(args, net)
         #self.decoder = ResnetDecoder(input_nc=3, output_nc=3)
         self.vic_coeff = args.vic_coeff
@@ -276,11 +298,11 @@ class VICReg(nn.Module):
     def __init__(self, args, net):
         super().__init__()
         self.args = args
-        self.num_features = int(args.mlp.split("-")[-1])
         #self.backbone = ResnetEncoder(input_nc=3, output_nc=3)
         self.projector = Projector(args)
         self.backbone = net.backbone
         self.net = net
+        self.num_features = 4096
         
     def forward(self, x, y):
         #x = self.backbone(x)
@@ -321,7 +343,7 @@ class Projector(nn.Module):
     def __init__(self, args):
         super().__init__()
         mlp = 4096
-        mlp_spec = f"{args.embedding}-{mlp}-{mlp]-{mlp]"
+        mlp_spec = f"{args.embedding}-{mlp}-{mlp}-{mlp}"
         f = list(map(int, mlp_spec.split("-")))
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.linear1 = nn.Linear(f[0], f[1])

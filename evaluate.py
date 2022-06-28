@@ -170,7 +170,7 @@ def main_worker(gpu, args):
     torch.cuda.set_device(gpu)
     torch.backends.cudnn.benchmark = True
 
-    cfg = mmcv.Config.fromfile(os.path.join("vicreg", "segformer_config_b5.py"))
+    cfg = mmcv.Config.fromfile(os.path.join("vicreg", "segformer_config_b0.py"))
     cfg.model.pretrained = None
     cfg.model.train_cfg = None
     cfg.model.decode_head.num_classes = 10
@@ -191,7 +191,7 @@ def main_worker(gpu, args):
     #    }
     #backbone.load_state_dict(state_dict, strict=False)
 
-    head = nn.Linear(512, 1000)
+    head = nn.Linear(256, 1000)
     head.weight.data.normal_(mean=0.0, std=0.01)
     head.bias.data.zero_()
 
@@ -319,7 +319,7 @@ def main_worker(gpu, args):
                     )
                     print(json.dumps(stats))
                     print(json.dumps(stats), file=stats_file)
-        plotter.plot('loss', 'val', 'Class Loss', loss.item(), epoch)
+        plotter.plot('loss', 'val', 'Class Loss', epoch, loss.item())
 
         # evaluate
         model.eval()
@@ -344,7 +344,7 @@ def main_worker(gpu, args):
                 best_acc5=best_acc.top5,
             )
             acc = top1.avg
-            plotter.plot('acc', 'val', 'Class Accuracy', acc, epoch)
+            plotter.plot('acc', 'val', 'Class Accuracy', epoch, acc)
             print(json.dumps(stats))
             print(json.dumps(stats), file=stats_file)
 
