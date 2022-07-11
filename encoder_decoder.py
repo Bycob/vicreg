@@ -1,8 +1,10 @@
 import functools
+import math
+
 from torch import nn
 import torch
 import torch.nn.functional as F
-import math
+
 
 def spectral_norm(module, mode=True):
     if mode:
@@ -13,6 +15,7 @@ def norm_layer(x):
             return Identity()
 
 
+        
 class ResnetBlock(nn.Module):
     """Define a Resnet block"""
 

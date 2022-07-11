@@ -16,26 +16,21 @@ import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
 import imgaug.augmenters as iaa
-import imgaug
-import cv2
 import mmcv
 
 import augmentations as aug
 from distributed import init_distributed_mode
 
-import resnet
-from encoder_decoder import ResnetEncoder, ResnetDecoder
-from mmcv.cnn import MODELS as MMCV_MODELS
-from mmcv.utils import Registry
+#from mmcv.cnn import MODELS as MMCV_MODELS
+#from mmcv.utils import Registry
 import segformer_config_b5
 import segformer_config_b0
-import EncoderDecoder
-import builder
-import mit
-import segformer_head
-import cross_entropy_loss
+#import builder
+#import mit
+#import segformer_head
+#import cross_entropy_loss
 
-from EncoderDecoder import build_segmentor
+from builder import build_segmentor
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "2"
@@ -59,11 +54,11 @@ class VisdomLinePlotter(object):
 
 
 def get_arguments():
-    parser = argparse.ArgumentParser(description="Pretrain a resnet model with VICReg", add_help=False)
+    parser = argparse.ArgumentParser(description="Pretrain a segformer model with VICReg", add_help=False)
 
     # Data
-    parser.add_argument("--data-dir", type=Path, default="/path/to/imagenet", required=True,
-                        help='Path to the image net dataset')
+    parser.add_argument("--data-dir", type=Path, default="/path/to/dataset", required=True,
+                        help='Path to the dataset')
 
     # Checkpoints
     parser.add_argument("--exp-dir", type=Path, default="./exp",
@@ -72,8 +67,8 @@ def get_arguments():
                         help='Print logs to the stats.txt file every [log-freq-time] seconds')
 
     # Model
-    parser.add_argument("--arch", type=str, default="resnet50",
-                        help='Architecture of the backbone encoder network')
+    parser.add_argument("--arch", type=str, default="b0",
+                        help='Architecture of the segformer')
     parser.add_argument("--embedding", default="256",
                         help='Size of the embedding')
 
@@ -94,11 +89,6 @@ def get_arguments():
                         help='Variance regularization loss coefficient')
     parser.add_argument("--cov-coeff", type=float, default=1.0,
                         help='Covariance regularization loss coefficient')
-
-    parser.add_argument("--vic-coeff", type=float, default=1.0,
-                        help='VICReg loss coefficient')
-    parser.add_argument("--dec-coeff", type=float, default=1.0,
-                        help='Decoder loss coefficeint')
     
     # Running
     parser.add_argument("--num-workers", type=int, default=10)
@@ -108,9 +98,6 @@ def get_arguments():
     # Distributed
     parser.add_argument('--world-size', default=1, type=int,
                         help='number of distributed processes')
-    parser.add_argument('--local_rank', default=-1, type=int)
-    parser.add_argument('--dist-url', default='env://',
-                        help='url used to set up distributed training')
 
     return parser
 
@@ -132,12 +119,6 @@ def main(args):
 
     transform = aug.TrainTransform()
     transform2 = aug.MaskTransform()
-    invTrans = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. ],
-                                                     std = [ 1/0.229, 1/0.224, 1/0.225 ]),
-                                transforms.Normalize(mean = [ -0.485, -0.456, -0.406 ],
-                                                     std = [ 1., 1., 1. ]),
-                               ])
-
 
     #dataset = datasets.ImageFolder(args.data_dir / "train", transform2)
     dataset = datasets.ImageFolder(args.data_dir, transform2)
@@ -161,7 +142,7 @@ def main(args):
             cfg.model, train_cfg=None, test_cfg=cfg.get("test_cfg")
         )
 
-    model = VICDecoder(args, net=net).cuda(gpu)
+    model = VICSegformer(args, net=net).cuda(gpu)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=True)
     optimizer = LARS(
@@ -211,27 +192,6 @@ def main(args):
             scaler.step(optimizer)
             scaler.update()
 
-            """if (step % 200) == 0:
-                #img = invTrans(img).cpu()
-                #x = invTrans(x).cpu()
-                #out = invTrans(out).cpu()
-                
-                img = torch.einsum('nchw->nhwc', img).cpu()
-                x = torch.einsum('nchw->nhwc', x).cpu()
-                out = torch.einsum('nchw->nhwc', out).cpu()
-
-                            
-                img = img.detach().numpy()
-                x = x.detach().numpy()
-                out = out.detach().numpy()
-                img = img.astype(np.uint8)
-                x = x.astype(np.uint8)
-                out = out.astype(np.uint8)
-                
-                cells = [img[4], x[4], out[4]]
-                grid_image = imgaug.draw_grid(cells, cols=3)
-                cv2.imwrite(str(epoch) + "_test.png", grid_image)"""
-
             current_time = time.time()
             if args.rank == 0 and current_time - last_logging > args.log_freq_time:
                 stats = dict(
@@ -273,24 +233,18 @@ def adjust_learning_rate(args, optimizer, loader, step):
         param_group["lr"] = lr
     return lr
 
-class VICDecoder(nn.Module):
+class VICSegformer(nn.Module):
     def __init__(self, args, net):
         super().__init__()
         self.args = args
         self.backbone = VICReg(args, net)
-        #self.decoder = ResnetDecoder(input_nc=3, output_nc=3)
-        self.vic_coeff = args.vic_coeff
-        self.dec_coeff = args.dec_coeff
 
     def forward(self, x, y, img):
         out, vicreg_loss = self.backbone(x, y)
-        #out = self.decoder(out)
 
-        #decoder_loss = F.mse_loss(out, img)
+        loss = self.vic_coeff*vicreg_loss
 
-        loss = self.vic_coeff*vicreg_loss #+ self.dec_coeff*decoder_loss
-
-        return out, loss#, decoder_loss
+        return out, loss
         
 
 
@@ -298,17 +252,12 @@ class VICReg(nn.Module):
     def __init__(self, args, net):
         super().__init__()
         self.args = args
-        #self.backbone = ResnetEncoder(input_nc=3, output_nc=3)
         self.projector = Projector(args)
         self.backbone = net.backbone
         self.net = net
         self.num_features = 4096
         
     def forward(self, x, y):
-        #x = self.backbone(x)
-        #out = x
-        #x = self.projector(x)
-        #y = self.projector(self.backbone(y))
         x = self.net.extract_feat(x)[-1]
         out = x
         x = self.projector(x)
@@ -457,15 +406,7 @@ class FullGatherLayer(torch.autograd.Function):
         all_gradients = torch.stack(grads)
         dist.all_reduce(all_gradients)
         return all_gradients[dist.get_rank()]
-    
-    
-def handle_sigusr1(signum, frame):
-    os.system(f'scontrol requeue {os.environ["SLURM_JOB_ID"]}')
-    exit()
 
-
-def handle_sigterm(signum, frame):
-    pass
 
 
 if __name__ == "__main__":

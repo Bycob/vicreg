@@ -7,10 +7,12 @@
 
 from PIL import ImageOps, ImageFilter
 import numpy as np
+
 import torchvision.transforms as transforms
 from torchvision.transforms.functional import InterpolationMode
 import torch.nn as nn
 import torch
+
 from timm.models.vision_transformer import PatchEmbed
 
 
@@ -41,6 +43,7 @@ class Solarization(object):
         
 
 class TrainTransform(object):
+    """transforms used for training in classic vicreg"""
     def __init__(self):
         self.transform = transforms.Compose(
             [
@@ -97,6 +100,7 @@ class TrainTransform(object):
 
     
 class MaskTransform(object):
+    """sencond set of transforms to use for vicreg, with no augmentations"""
     def __init__(self):
         self.transform = transforms.Compose(
             [

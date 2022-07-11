@@ -1,10 +1,8 @@
 import math
 import warnings
-from typing import Sequence
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from mmcv.cnn import Conv2d, build_activation_layer, build_norm_layer, build_conv_layer
 from mmcv.utils import to_2tuple

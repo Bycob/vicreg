@@ -6,30 +6,44 @@ import os
 import sys
 import time
 import numpy as np
+from visdom import Visdom
 
 import torch
 import torch.nn.functional as F
 from torch import nn, optim
-import torch.distributed as dist
 import torchvision.datasets as datasets
-
-import augmentations as aug
-from distributed import init_distributed_mode
 
 import resnet
 import imgaug.augmenters as iaa
-import imageio
 import imgaug
 import cv2
 
 from ResDecoder import ResnetGenerator
-from real_denoising import Denoising_Autoencoder
-
-import matplotlib
-matplotlib.use('Agg')
+import augmentations as aug
+from distributed import init_distributed_mode
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+class VisdomLinePlotter(object):
+    """Plots to Visdom"""
+    def __init__(self, env_name='main'):
+        self.viz = Visdom(port=8098)
+        self.env = env_name
+        self.plots = {}
+    def plot(self, var_name, split_name, title_name, x, y):
+        if var_name not in self.plots:
+            self.plots[var_name] = self.viz.line(X=np.array([x,x]), Y=np.array([y,y]), env=self.env, opts=dict(
+                legend=[split_name],
+                title=title_name,
+                xlabel='Time',
+                ylabel=var_name
+            ))
+        else:
+            self.viz.line(X=np.array([x]), Y=np.array([y]), env=self.env, win=self.plots[var_name], name=split_name, update = 'append')
+    def image(self, grid):
+        self.viz.image(grid)
+
 
 
 def get_arguments():
@@ -48,9 +62,7 @@ def get_arguments():
     # Model
     parser.add_argument("--arch", type=str, default="resnet50",
                         help='Architecture of the backbone encoder network')
-    parser.add_argument("--mlp", default="8192-8192-8192",
-                        help='Size and number of layers of the MLP expander head')
-
+    
     # Optim
     parser.add_argument("--epochs", type=int, default=100,
                         help='Number of epochs')
@@ -69,14 +81,19 @@ def get_arguments():
     # Distributed
     parser.add_argument("--world-size", default=1, type=int,
                         help='number of distributed processes')
-    parser.add_argument("--local_rank", default=-1, type=int)
-    parser.add_argument("--dist-url", default='env://',
-                        help='url used to set up distributed training')
+
+    #Cutout
+    parser.add_argument("--nb-iterations", type=int, default=2,
+                        help='number of cutouts made in the training image')
+    parser.add_argument("--cutout-size", type=float, default=0.2,
+                        help='Size of the cutouts made in the training image')
 
     return parser
 
 
 def main(args):
+    plotter = VisdomLinePlotter(env_name='env_test')
+    
     torch.backends.cudnn.benchmark = True
     init_distributed_mode(args)
     print(args)
@@ -88,11 +105,9 @@ def main(args):
         print(" ".join(sys.argv))
         print(" ".join(sys.argv), file=stats_file)
 
-    transforms = aug.TrainTransform()
-    transforms2 = aug.MaskTransform()
-    unorm = UnNormalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+    transforms = aug.MaskTransform() #transform without augmentations
 
-    dataset = datasets.ImageFolder(args.data_dir / "train", transforms2)
+    dataset = datasets.ImageFolder(args.data_dir / "train", transforms)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
@@ -107,15 +122,13 @@ def main(args):
     model = ResnetGenerator(input_nc=3, output_nc=3).cuda(gpu)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
-    '''optimizer = LARS(
+    optimizer = LARS(
         model.parameters(),
         lr=0,
         weight_decay=args.wd,
         weight_decay_filter=exclude_bias_and_norm,
         lars_adaptation_filter=exclude_bias_and_norm,
-    )'''
-
-    optimizer = optim.SGD(model.parameters(), lr=0.1)
+    )
 
     if (args.exp_dir / "model.pth").is_file():
         if args.rank == 0:
@@ -135,12 +148,11 @@ def main(args):
         for step, ((x, _), _) in enumerate(loader, start=epoch * len(loader)):
             img = x
 
+            """cutout on the image, img is the original image and x is the image with cutouts"""
             x = torch.einsum('nchw->nhwc', x)
             x = x.numpy()
-
-            cut = iaa.Cutout(nb_iterations=200, size=0.005)
+            cut = iaa.Cutout(nb_iterations=args.nb_iterations, size=args.cutout_size)
             x = cut(images=x)
-
             x = torch.tensor(x)
             x = torch.einsum('nhwc->nchw', x)
 
@@ -157,22 +169,16 @@ def main(args):
             scaler.step(optimizer)
             scaler.update()
 
+            """print examples of the image, the image with cutouts and the reconstructed image"""
             if (step % 200) == 0:
-                img2 = img.cpu()
-                x2 = x.cpu()
-                out2 = out.cpu()
-
-                img2 = unorm(img2)
-                x2 = unorm(x2)
-                out2 = unorm(out2)
-                
-                img2 = torch.einsum('nchw->nhwc', img2)
-                x2 = torch.einsum('nchw->nhwc', x2)
-                out2 = torch.einsum('nchw->nhwc', out2)
+                img2 = torch.einsum('nchw->nhwc', img.cpu())
+                x2 = torch.einsum('nchw->nhwc', x.cpu())
+                out2 = torch.einsum('nchw->nhwc', out.cpu())
                 
                 img2 = img2.detach().numpy()
                 x2 = x2.detach().numpy()
                 out2 = out2.detach().numpy()
+                
                 img2 = img2.astype(np.uint8)
                 x2 = x2.astype(np.uint8)
                 out2 = out2.astype(np.uint8)
@@ -180,6 +186,7 @@ def main(args):
                 cells = [img2[4], x2[4], out2[4]]
                 grid_image = imgaug.draw_grid(cells, cols=3)
                 cv2.imwrite(str(epoch) + "_test.png", grid_image)
+                plotter.image(grid_image)
 
             current_time = time.time()
             if args.rank == 0 and current_time - last_logging > args.log_freq_time:
@@ -193,6 +200,8 @@ def main(args):
                 print(json.dumps(stats))
                 print(json.dumps(stats), file=stats_file)
                 last_logging = current_time
+                plotter.plot('loss', 'val', 'Class Loss', int(current_time - start_time), loss.item())
+                
         if args.rank == 0:
             state = dict(
                 epoch=epoch + 1,
@@ -219,6 +228,8 @@ def adjust_learning_rate(args, optimizer, loader, step):
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
     return lr
+
+
 
 class Denoising_Autoencoder_Res(nn.Module):
     def __init__(self, args):
@@ -313,18 +324,6 @@ class LARS(optim.Optimizer):
                 p.add_(mu, alpha=-g["lr"])
 
 
-class UnNormalize(object):
-    def __init__(self, mean, std):
-        self.mean = mean
-        self.std = std
-
-    def __call__(self, tensor):
-        for t, m, s in zip(tensor, self.mean, self.std):
-            t = t.mul(s).add(m)
-            # The normalize code -> t.sub_(m).div_(s)
-        return tensor
-
-    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser('Autoencoder training script', parents=[get_arguments()])

@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import numpy as np
+from visdom import Visdom
 
 import torch
 import torch.nn.functional as F
@@ -21,15 +22,33 @@ import cv2
 import augmentations as aug
 from distributed import init_distributed_mode
 
-import resnet
 from encoder_decoder import ResnetEncoder, ResnetDecoder
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
+class VisdomLinePlotter(object):
+    """Plots to Visdom"""
+    def __init__(self, env_name='main'):
+        self.viz = Visdom(port=8098)
+        self.env = env_name
+        self.plots = {}
+    def plot(self, var_name, split_name, title_name, x, y):
+        if var_name not in self.plots:
+            self.plots[var_name] = self.viz.line(X=np.array([x,x]), Y=np.array([y,y]), env=self.env, opts=dict(
+                legend=[split_name],
+                title=title_name,
+                xlabel='Time',
+                ylabel=var_name
+            ))
+        else:
+            self.viz.line(X=np.array([x]), Y=np.array([y]), env=self.env, win=self.plots[var_name], name=split_name, update = 'append')
+    def image(self, grid):
+        self.viz.image(grid)
+
 
 def get_arguments():
-    parser = argparse.ArgumentParser(description="Pretrain a resnet model with VICReg", add_help=False)
+    parser = argparse.ArgumentParser(description="Pretrain a encoder/decoder model with VICReg", add_help=False)
 
     # Data
     parser.add_argument("--data-dir", type=Path, default="/path/to/imagenet", required=True,
@@ -42,8 +61,6 @@ def get_arguments():
                         help='Print logs to the stats.txt file every [log-freq-time] seconds')
 
     # Model
-    parser.add_argument("--arch", type=str, default="resnet50",
-                        help='Architecture of the backbone encoder network')
     parser.add_argument("--mlp", default="8192-8192-8192",
                         help='Size and number of layers of the MLP expander head')
 
@@ -78,26 +95,14 @@ def get_arguments():
     # Distributed
     parser.add_argument('--world-size', default=1, type=int,
                         help='number of distributed processes')
-    parser.add_argument('--local_rank', default=-1, type=int)
-    parser.add_argument('--dist-url', default='env://',
-                        help='url used to set up distributed training')
 
     return parser
 
 
-class UnNormalize(object):
-    def __init__(self, mean, std):
-        self.mean = mean
-        self.std = std
-
-    def __call__(self, tensor):
-        for t, m, s in zip(tensor, self.mean, self.std):
-            t = t.mul(s).add(m)
-            # The normalize code -> t.sub_(m).div_(s)
-        return tensor
-
 
 def main(args):
+    plotter = VisdomLinePlotter(env_name='env_test')
+    
     torch.backends.cudnn.benchmark = True
     init_distributed_mode(args)
     print(args)
@@ -109,14 +114,8 @@ def main(args):
         print(" ".join(sys.argv))
         print(" ".join(sys.argv), file=stats_file)
 
-    transform = aug.TrainTransform()
-    transform2 = aug.MaskTransform()
-    unorm = UnNormalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
-    invTrans = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. ],
-                                                     std = [ 1/0.229, 1/0.224, 1/0.225 ]),
-                                transforms.Normalize(mean = [ -0.485, -0.456, -0.406 ],
-                                                     std = [ 1., 1., 1. ]),
-                               ])
+    transform = aug.TrainTransform() #classic vicreg transforms
+    transform2 = aug.MaskTransform() #transforms without augmentations
 
 
     dataset = datasets.ImageFolder(args.data_dir / "train", transform2)
@@ -158,13 +157,10 @@ def main(args):
         sampler.set_epoch(epoch)
         for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
             img = x
-
             x = torch.einsum('nchw->nhwc', x)
             x = x.numpy()
-
             cut = iaa.Cutout(nb_iterations=1, size=0.3)
             x = cut(images=x)
-
             x = torch.tensor(x)
             x = torch.einsum('nhwc->nchw', x)
 
@@ -182,10 +178,6 @@ def main(args):
             scaler.update()
 
             if (step % 200) == 0:
-                #img = invTrans(img).cpu()
-                #x = invTrans(x).cpu()
-                #out = invTrans(out).cpu()
-                
                 img = torch.einsum('nchw->nhwc', img).cpu()
                 x = torch.einsum('nchw->nhwc', x).cpu()
                 out = torch.einsum('nchw->nhwc', out).cpu()
@@ -201,6 +193,7 @@ def main(args):
                 cells = [img[4], x[4], out[4]]
                 grid_image = imgaug.draw_grid(cells, cols=3)
                 cv2.imwrite(str(epoch) + "_test.png", grid_image)
+                plotter.image(grid_image)
 
             current_time = time.time()
             if args.rank == 0 and current_time - last_logging > args.log_freq_time:
@@ -215,6 +208,8 @@ def main(args):
                 print(json.dumps(stats))
                 print(json.dumps(stats), file=stats_file)
                 last_logging = current_time
+                plotter.plot('loss', 'val', 'Class Loss', int(current_time - start_time), loss.item())
+                
         if args.rank == 0:
             state = dict(
                 epoch=epoch + 1,
@@ -223,7 +218,7 @@ def main(args):
             )
             torch.save(state, args.exp_dir / "model.pth")
     if args.rank == 0:
-        torch.save(model.module.backbone.backbone.state_dict(), args.exp_dir / "resnet50.pth")
+        torch.save(model.module.backbone.backbone.state_dict(), args.exp_dir / "resnet.pth")
 
 
 def adjust_learning_rate(args, optimizer, loader, step):
@@ -423,15 +418,6 @@ class FullGatherLayer(torch.autograd.Function):
         return all_gradients[dist.get_rank()]
     
     
-def handle_sigusr1(signum, frame):
-    os.system(f'scontrol requeue {os.environ["SLURM_JOB_ID"]}')
-    exit()
-
-
-def handle_sigterm(signum, frame):
-    pass
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser('VICReg training script', parents=[get_arguments()])
     args = parser.parse_args()

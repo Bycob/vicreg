@@ -4,6 +4,7 @@ from mmcv.cnn import MODELS as MMCV_MODELS
 from mmcv.cnn.bricks.registry import ATTENTION as MMCV_ATTENTION
 from mmcv.utils import Registry
 
+
 MODELS = Registry('models', parent=MMCV_MODELS)
 ATTENTION = Registry('attention', parent=MMCV_ATTENTION)
 

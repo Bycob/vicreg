@@ -3,14 +3,11 @@ import torch.nn as nn
 from mmcv.cnn import ConvModule
 import warnings
 
-from builder import HEADS
+from builder import HEADS, build_loss
 
 from abc import ABCMeta, abstractmethod
 
 from mmcv.runner import BaseModule, auto_fp16, force_fp32
-
-from builder import build_loss
-
 from mmcv.utils import Registry, build_from_cfg
 
 

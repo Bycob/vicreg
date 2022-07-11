@@ -11,21 +11,19 @@ import argparse
 import json
 import os
 import random
-import signal
 import sys
 import time
-import urllib
-
 import numpy as np
+from visdom import Visdom
+
 from torch import nn, optim
 from torchvision import datasets, transforms
 import torch
 
 import resnet
 from encoder_decoder import ResnetEncoder
-from visdom import Visdom
 
-from EncoderDecoder import build_segmentor
+from builder import build_segmentor
 import mmcv
 import mit
 import segformer_head
@@ -34,6 +32,7 @@ import cross_entropy_loss
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
 
 class VisdomLinePlotter(object):
     """Plots to Visdom"""
@@ -53,95 +52,41 @@ class VisdomLinePlotter(object):
             self.viz.line(X=np.array([x]), Y=np.array([y]), env=self.env, win=self.plots[var_name], name=split_name, update = 'append')
 
 
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 def get_arguments():
-    parser = argparse.ArgumentParser(
-        description="Evaluate a pretrained model on ImageNet"
-    )
+    parser = argparse.ArgumentParser(description="Evaluate a pretrained model")
 
     # Data
     parser.add_argument("--data-dir", type=Path, help="path to dataset")
-    parser.add_argument(
-        "--train-percent",
-        default='100',
-        type=str,
-        choices=('100', '10', '1', 'zero1'),
-        help="size of traing set in percent",
-    )
+    parser.add_argument("--train-percent", default='100', type=str, choices=('100', '10', '1', 'zero1'), help="size of traing set in percent", )
 
     # Checkpoint
     parser.add_argument("--pretrained", type=Path, help="path to pretrained model")
-    parser.add_argument(
-        "--exp-dir",
-        default="./checkpoint/lincls/",
-        type=Path,
-        metavar="DIR",
-        help="path to checkpoint directory",
-    )
-    parser.add_argument(
-        "--print-freq", default=100, type=int, metavar="N", help="print frequency"
-    )
+    parser.add_argument("--exp-dir", default="./checkpoint/lincls/", type=Path, metavar="DIR", help="path to checkpoint directory", )
+    parser.add_argument("--print-freq", default=100, type=int, metavar="N", help="print frequency")
 
     # Model
-    parser.add_argument("--arch", type=str, default="resnet50")
+    parser.add_argument("--arch", type=str, default="resnet50", choices=("resnet50", "segformer", "encoder"), help='architecture of the network to evaluate')
 
     # Optim
-    parser.add_argument(
-        "--epochs",
-        default=100,
-        type=int,
-        metavar="N",
-        help="number of total epochs to run",
-    )
-    parser.add_argument(
-        "--batch-size", default=256, type=int, metavar="N", help="mini-batch size"
-    )
-    parser.add_argument(
-        "--lr-backbone",
-        default=0.0,
-        type=float,
-        metavar="LR",
-        help="backbone base learning rate",
-    )
-    parser.add_argument(
-        "--lr-head",
-        default=0.3,
-        type=float,
-        metavar="LR",
-        help="classifier base learning rate",
-    )
-    parser.add_argument(
-        "--weight-decay", default=1e-6, type=float, metavar="W", help="weight decay"
-    )
-    parser.add_argument(
-        "--weights",
-        default="freeze",
-        type=str,
-        choices=("finetune", "freeze"),
-        help="finetune or freeze resnet weights",
-    )
+    parser.add_argument("--epochs", default=100, type=int, metavar="N", help="number of total epochs to run", )
+    parser.add_argument("--batch-size", default=256, type=int, metavar="N", help="mini-batch size")
+    parser.add_argument("--lr-backbone", default=0.0, type=float, metavar="LR", help="backbone base learning rate", )
+    parser.add_argument("--lr-head", default=0.3, type=float, metavar="LR", help="classifier base learning rate", )
+    parser.add_argument("--weight-decay", default=1e-6, type=float, metavar="W", help="weight decay")
+    parser.add_argument("--weights", default="freeze", type=str, choices=("finetune", "freeze"), help="finetune or freeze resnet weights", )
 
     # Running
-    parser.add_argument(
-        "--workers",
-        default=8,
-        type=int,
-        metavar="N",
-        help="number of data loader workers",
-    )
+    parser.add_argument("--workers", default=8, type=int, metavar="N", help="number of data loader workers", )
 
     return parser
+
 
 
 def main():
     parser = get_arguments()
     args = parser.parse_args()
     args.ngpus_per_node = torch.cuda.device_count()
-    if "SLURM_JOB_ID" in os.environ:
-        signal.signal(signal.SIGUSR1, handle_sigusr1)
-        signal.signal(signal.SIGTERM, handle_sigterm)
     # single-node distributed training
     args.rank = 0
     args.dist_url = f"tcp://localhost:{random.randrange(49152, 65535)}"
@@ -150,7 +95,6 @@ def main():
 
 
 def main_worker(gpu, args):
-
     plotter = VisdomLinePlotter(env_name='env_test')
     
     args.rank += gpu
@@ -170,16 +114,24 @@ def main_worker(gpu, args):
     torch.cuda.set_device(gpu)
     torch.backends.cudnn.benchmark = True
 
-    cfg = mmcv.Config.fromfile(os.path.join("vicreg", "segformer_config_b0.py"))
-    cfg.model.pretrained = None
-    cfg.model.train_cfg = None
-    cfg.model.decode_head.num_classes = 10
-    net = build_segmentor(
+    """Choice of the backbone : segformer, encoder or classic vicreg resnet"""
+    if args.arch == "segformer":
+        cfg = mmcv.Config.fromfile(os.path.join("vicreg", "segformer_config_b0.py"))
+        cfg.model.pretrained = None
+        cfg.model.train_cfg = None
+        cfg.model.decode_head.num_classes = 10
+        net = build_segmentor(
             cfg.model, train_cfg=None, test_cfg=cfg.get("test_cfg")
         )
-    backbone = net.backbone
-    #backbone = ResnetEncoder(input_nc=3, output_nc=3)
-    #backbone, embedding = resnet.__dict__[args.arch](zero_init_residual=True)
+        backbone = net.backbone
+
+    elif args.arch == "encoder":
+        backbone = ResnetEncoder(input_nc=3, output_nc=3)
+
+    elif args.arch == "resnet50":
+        backbone, embedding = resnet.__dict__[args.arch](zero_init_residual=True)
+
+    
     state_dict = torch.load(args.pretrained, map_location="cpu")
     missing_keys, unexpected_keys = backbone.load_state_dict(state_dict, strict=False)
     assert missing_keys == [] and unexpected_keys == []
@@ -191,11 +143,12 @@ def main_worker(gpu, args):
     #    }
     #backbone.load_state_dict(state_dict, strict=False)
 
+    """Change the size of the input according to the backbone chosen"""
     head = nn.Linear(256, 1000)
     head.weight.data.normal_(mean=0.0, std=0.01)
     head.bias.data.zero_()
 
-
+    """only use with the segformer backbone"""
     class Model(nn.Module):
         def __init__(self, backbone):
             super().__init__()
@@ -359,15 +312,6 @@ def main_worker(gpu, args):
             )
             torch.save(state, args.exp_dir / "checkpoint.pth")
 
-
-
-def handle_sigusr1(signum, frame):
-    os.system(f'scontrol requeue {os.getenv("SLURM_JOB_ID")}')
-    exit()
-
-
-def handle_sigterm(signum, frame):
-    pass
 
 
 class AverageMeter(object):

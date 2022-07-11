@@ -2,13 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from builder import LOSSES
-
 import functools
-
 import mmcv
 import numpy as np
-import torch.nn.functional as F
+
+from builder import LOSSES
 
 
 def get_class_weight(class_weight):
@@ -26,6 +24,8 @@ def get_class_weight(class_weight):
             class_weight = mmcv.load(class_weight)
 
     return class_weight
+
+
 
 def weight_reduce_loss(loss, weight=None, reduction='mean', avg_factor=None):
     """Apply element-wise weight and reduce loss.
@@ -57,6 +57,7 @@ def weight_reduce_loss(loss, weight=None, reduction='mean', avg_factor=None):
     return loss
 
 
+
 def cross_entropy(pred,
                   label,
                   weight=None,
@@ -83,6 +84,7 @@ def cross_entropy(pred,
     return loss
 
 
+
 def _expand_onehot_labels(labels, label_weights, target_shape, ignore_index):
     """Expand onehot labels to match the size of prediction."""
     bin_labels = labels.new_zeros(target_shape)
@@ -103,6 +105,7 @@ def _expand_onehot_labels(labels, label_weights, target_shape, ignore_index):
         bin_label_weights *= valid_mask
 
     return bin_labels, bin_label_weights
+
 
 
 def binary_cross_entropy(pred,
@@ -146,6 +149,7 @@ def binary_cross_entropy(pred,
     return loss
 
 
+
 def mask_cross_entropy(pred,
                        target,
                        label,
@@ -180,6 +184,8 @@ def mask_cross_entropy(pred,
     pred_slice = pred[inds, label].squeeze(1)
     return F.binary_cross_entropy_with_logits(
         pred_slice, target, weight=class_weight, reduction='mean')[None]
+
+
 
 
 @LOSSES.register_module()

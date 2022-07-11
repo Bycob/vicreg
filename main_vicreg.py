@@ -14,6 +14,7 @@ import os
 import sys
 import time
 import random
+from visdom import Visdom
 
 import torch
 import torch.nn.functional as F
@@ -21,12 +22,8 @@ from torch import nn, optim
 import torch.distributed as dist
 import torchvision.datasets as datasets
 
-import numpy.typing
-from imgaug.augmenters import arithmetic
-
 import augmentations as aug
 from distributed import init_distributed_mode
-
 
 import resnet
 import imgaug.augmenters as iaa
@@ -35,6 +32,22 @@ import imgaug.augmenters as iaa
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
+class VisdomLinePlotter(object):
+    """Plots to Visdom"""
+    def __init__(self, env_name='main'):
+        self.viz = Visdom(port=8098)
+        self.env = env_name
+        self.plots = {}
+    def plot(self, var_name, split_name, title_name, x, y):
+        if var_name not in self.plots:
+            self.plots[var_name] = self.viz.line(X=np.array([x,x]), Y=np.array([y,y]), env=self.env, opts=dict(
+                legend=[split_name],
+                title=title_name,
+                xlabel='Time',
+                ylabel=var_name
+            ))
+        else:
+            self.viz.line(X=np.array([x]), Y=np.array([y]), env=self.env, win=self.plots[var_name], name=split_name, update = 'append')
 
 
 def get_arguments():
@@ -82,14 +95,13 @@ def get_arguments():
     # Distributed
     parser.add_argument('--world-size', default=1, type=int,
                         help='number of distributed processes')
-    parser.add_argument('--local_rank', default=-1, type=int)
-    parser.add_argument('--dist-url', default='env://',
-                        help='url used to set up distributed training')
 
     return parser
 
 
 def main(args):
+    plotter = VisdomLinePlotter(env_name='env_test')
+    
     torch.backends.cudnn.benchmark = True
     init_distributed_mode(args)
     print(args)
@@ -182,6 +194,7 @@ def main(args):
                 print(json.dumps(stats))
                 print(json.dumps(stats), file=stats_file)
                 last_logging = current_time
+                plotter.plot('loss', 'val', 'Class Loss', int(current_time - start_time), loss.item())
         if args.rank == 0:
             state = dict(
                 epoch=epoch + 1,
@@ -222,17 +235,12 @@ class VICReg(nn.Module):
         self.projector = Projector(args, self.embedding)
 
     def forward(self, x, y):
-        print(self.backbone)
         x = self.backbone(x)
-        print(x.shape
         #x = x.squeeze()
-        print(x.shape)
-        print(self.projector)
         x = self.projector(x)
         #x = self.projector(self.backbone(x))
-        print(x.shape)
         y = self.projector(self.backbone(y).squeeze())
-        print(stop)
+
         repr_loss = F.mse_loss(x, y)
 
         x = torch.cat(FullGatherLayer.apply(x), dim=0)
@@ -361,15 +369,6 @@ class FullGatherLayer(torch.autograd.Function):
         all_gradients = torch.stack(grads)
         dist.all_reduce(all_gradients)
         return all_gradients[dist.get_rank()]
-
-
-def handle_sigusr1(signum, frame):
-    os.system(f'scontrol requeue {os.environ["SLURM_JOB_ID"]}')
-    exit()
-
-
-def handle_sigterm(signum, frame):
-    pass
 
 
 if __name__ == "__main__":
