@@ -21,14 +21,15 @@ import mmcv
 import augmentations as aug
 from distributed import init_distributed_mode
 
-#from mmcv.cnn import MODELS as MMCV_MODELS
-#from mmcv.utils import Registry
+from mmcv.cnn import MODELS as MMCV_MODELS
+from mmcv.utils import Registry
 import segformer_config_b5
 import segformer_config_b0
-#import builder
-#import mit
-#import segformer_head
-#import cross_entropy_loss
+import builder
+import EncoderDecoder
+import mit
+import segformer_head
+import cross_entropy_loss
 
 from builder import build_segmentor
 
@@ -98,6 +99,15 @@ def get_arguments():
     # Distributed
     parser.add_argument('--world-size', default=1, type=int,
                         help='number of distributed processes')
+    parser.add_argument('--local_rank', default=-1, type=int)
+    parser.add_argument('--dist-url', default='env://',
+                        help='url used to set up distributed training')
+
+    #Cutout
+    parser.add_argument("--nb-iterations", type=int, default=1,
+                        help='number of cutouts made in the training image')
+    parser.add_argument("--cutout-size", type=float, default=0.3,
+                        help='Size of the cutouts made in the training image')
 
     return parser
 
@@ -117,11 +127,10 @@ def main(args):
         print(" ".join(sys.argv))
         print(" ".join(sys.argv), file=stats_file)
 
-    transform = aug.TrainTransform()
-    transform2 = aug.MaskTransform()
+    transform = aug.MaskTransform()
 
     #dataset = datasets.ImageFolder(args.data_dir / "train", transform2)
-    dataset = datasets.ImageFolder(args.data_dir, transform2)
+    dataset = datasets.ImageFolder(args.data_dir, transform)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
@@ -169,13 +178,10 @@ def main(args):
         sampler.set_epoch(epoch)
         for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
             img = x
-
             x = torch.einsum('nchw->nhwc', x)
             x = x.numpy()
-
-            cut = iaa.Cutout(nb_iterations=1, size=0.3)
+            cut = iaa.Cutout(nb_iterations=args.nb_iterations, size=args.cutout_size)
             x = cut(images=x)
-
             x = torch.tensor(x)
             x = torch.einsum('nhwc->nchw', x)
 
@@ -240,9 +246,7 @@ class VICSegformer(nn.Module):
         self.backbone = VICReg(args, net)
 
     def forward(self, x, y, img):
-        out, vicreg_loss = self.backbone(x, y)
-
-        loss = self.vic_coeff*vicreg_loss
+        out, loss = self.backbone(x, y)
 
         return out, loss
         

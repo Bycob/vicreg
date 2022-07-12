@@ -5,6 +5,7 @@ import torch.distributed as dist
 
 import warnings
 import builder
+from builder import SEGMENTORS
 
 from abc import ABCMeta, abstractmethod
 from collections import OrderedDict

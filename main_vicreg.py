@@ -96,6 +96,14 @@ def get_arguments():
     parser.add_argument('--world-size', default=1, type=int,
                         help='number of distributed processes')
 
+    #Cutout
+    parser.add_argument("--y-cutout", default=0, type=int,
+                        help='1 if cutout is done on the second image, 0 if not')
+    parser.add_argument("--nb-iterations", type=int, default=2,
+                        help='number of cutouts made in the training image')
+    parser.add_argument("--cutout-size", type=float, default=0.2,
+                        help='Size of the cutouts made in the training image')
+    
     return parser
 
 
@@ -113,10 +121,9 @@ def main(args):
         print(" ".join(sys.argv))
         print(" ".join(sys.argv), file=stats_file)
 
-    transforms = aug.TrainTransform()
-    transforms2 = aug.MaskTransform()
+    transforms = aug.MaskTransform()
 
-    dataset = datasets.ImageFolder(args.data_dir / "train", transforms2)
+    dataset = datasets.ImageFolder(args.data_dir / "train", transforms)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
@@ -157,18 +164,18 @@ def main(args):
         for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
             #apply masking
             x = torch.einsum('nchw->nhwc', x)
-            #y = torch.einsum('nchw->nhwc', y)
             x = x.numpy()
-            #y = y.numpy()
-
-            cut = iaa.Cutout(nb_iterations=50, size=0.01)
+            cut = iaa.Cutout(nb_iterations=args.nb_iterations, size=args.cutout_size)
             x = cut(images=x)
-            #y = cut(images=y)
-
             x = torch.tensor(x)
-            #y = torch.tensor(y)
             x = torch.einsum('nhwc->nchw', x)
-            #y = torch.einsum('nhwc->nchw', y)
+        
+            if args.y_cutout == 1:
+                y = torch.einsum('nchw->nhwc', y)
+                y = y.numpy()
+                y = cut(images=y)
+                y = torch.tensor(y)
+                y = torch.einsum('nhwc->nchw', y)
             
             x = x.cuda(gpu, non_blocking=True)
             y = y.cuda(gpu, non_blocking=True)
@@ -229,16 +236,11 @@ class VICReg(nn.Module):
         self.args = args
         self.num_features = int(args.mlp.split("-")[-1])
         self.backbone, self.embedding = resnet.__dict__[args.arch](zero_init_residual=True)
-        #self.backbone = encoder.ResnetEncoder(input_nc=3, output_nc=3)
-        #self.embedding = 56
-                
         self.projector = Projector(args, self.embedding)
 
     def forward(self, x, y):
         x = self.backbone(x)
-        #x = x.squeeze()
         x = self.projector(x)
-        #x = self.projector(self.backbone(x))
         y = self.projector(self.backbone(y).squeeze())
 
         repr_loss = F.mse_loss(x, y)
@@ -252,7 +254,7 @@ class VICReg(nn.Module):
         std_y = torch.sqrt(y.var(dim=0) + 0.0001)
         std_loss = torch.mean(F.relu(1 - std_x)) / 2 + torch.mean(F.relu(1 - std_y)) / 2
 
-        cov_x = (x.T @ x) / (self.args.batch_size - 1) #torch.transpose(x, 2, 3)
+        cov_x = (x.T @ x) / (self.args.batch_size - 1)
         cov_y = (y.T @ y) / (self.args.batch_size - 1)
         cov_loss = off_diagonal(cov_x).pow_(2).sum().div(
             self.num_features
@@ -284,10 +286,8 @@ def exclude_bias_and_norm(p):
 
 def off_diagonal(x):
     n, m = x.shape
-    #a, b, n, m = x.shape
     assert n == m
     return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
-    #return x.flatten(start_dim=2)[:, :, :-1].view(a, b, n - 1, n + 1)[:, :, :, 1:].flatten()
 
 
 class LARS(optim.Optimizer):

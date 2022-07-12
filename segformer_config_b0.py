@@ -1,7 +1,3 @@
-from EncoderDecoder import EncoderDecoder
-from mit import MixVisionTransformer
-from segformer_head import SegformerHead
-
 # model settings
 model = dict(
     type="EncoderDecoder",

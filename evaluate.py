@@ -58,7 +58,7 @@ def get_arguments():
 
     # Data
     parser.add_argument("--data-dir", type=Path, help="path to dataset")
-    parser.add_argument("--train-percent", default='100', type=str, choices=('100', '10', '1', 'zero1'), help="size of traing set in percent", )
+    parser.add_argument("--train-percent", default='100', type=str, choices=('100', '10', '1', 'zero1'), help="size of training set in percent", )
 
     # Checkpoint
     parser.add_argument("--pretrained", type=Path, help="path to pretrained model")
@@ -162,9 +162,14 @@ def main_worker(gpu, args):
             x = torch.flatten(x, 1)
 
             return x
+
+    if args.arch == "segformer":
+        bbone = Model(backbone)
+        model = nn.Sequential(bbone, head)
+
+    else:
+        model = nn.Sequential(backbone, head)
         
-    bbone = Model(backbone)
-    model = nn.Sequential(bbone, head)
     model.cuda(gpu)
 
     if args.weights == "freeze":

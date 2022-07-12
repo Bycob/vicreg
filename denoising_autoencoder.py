@@ -50,8 +50,8 @@ def get_arguments():
     parser = argparse.ArgumentParser(description="Pretrain a denoising autoencoder", add_help=False)
 
     # Data
-    parser.add_argument("--data-dir", type=Path, default="/path/to/imagenet", required=True,
-                        help='Path to the image net dataset')
+    parser.add_argument("--data-dir", type=Path, default="/path/to/dataset", required=True,
+                        help='Path to the dataset')
 
     # Checkpoints
     parser.add_argument("--exp-dir", type=Path, default="./exp",
@@ -105,9 +105,9 @@ def main(args):
         print(" ".join(sys.argv))
         print(" ".join(sys.argv), file=stats_file)
 
-    transforms = aug.MaskTransform() #transform without augmentations
+    transform = aug.MaskTransform()
 
-    dataset = datasets.ImageFolder(args.data_dir / "train", transforms)
+    dataset = datasets.ImageFolder(args.data_dir / "train", transform)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
@@ -210,7 +210,7 @@ def main(args):
             )
             torch.save(state, args.exp_dir / "model.pth")
     if args.rank == 0:
-        torch.save(model.module.backbone.state_dict(), args.exp_dir / "resnet50.pth")
+        torch.save(model.module.backbone.state_dict(), args.exp_dir / "resnet.pth")
 
 
 def adjust_learning_rate(args, optimizer, loader, step):
@@ -229,39 +229,6 @@ def adjust_learning_rate(args, optimizer, loader, step):
         param_group["lr"] = lr
     return lr
 
-
-
-class Denoising_Autoencoder_Res(nn.Module):
-    def __init__(self, args):
-        super().__init__()
-        self.args = args
-        self.backbone, self.embedding = resnet.__dict__[args.arch](
-            zero_init_residual=True
-        )
-        self.decoder = Decoder(args)
-
-    def forward(self, x, img):
-        out = self.decoder(self.backbone(x))
-        loss = F.mse_loss(out, img)
-
-        return loss, out
-
-
-def Decoder(args):
-    layers = []
-    layers.append(nn.ConvTranspose2d(2048, 2048, kernel_size=7, stride=2, padding=0))
-    layers.append(nn.SELU(True))
-    layers.append(nn.ConvTranspose2d(2048, 1024, kernel_size=3, stride=2, padding=1))
-    layers.append(nn.SELU(True))
-    layers.append(nn.ConvTranspose2d(1024, 512, kernel_size=5, stride=2, padding=1))
-    layers.append(nn.SELU(True))
-    layers.append(nn.ConvTranspose2d(512, 256, kernel_size=5, stride=2, padding=1))
-    layers.append(nn.SELU(True))
-    layers.append(nn.ConvTranspose2d(256, 64, kernel_size=5, stride=2, padding=1))
-    layers.append(nn.SELU(True))
-    layers.append(nn.ConvTranspose2d(64, 3, kernel_size=5, stride=2, padding=1, output_padding=1))
-    layers.append(nn.SELU(True))
-    return nn.Sequential(*layers)
 
 def exclude_bias_and_norm(p):
     return p.ndim == 1

@@ -96,6 +96,12 @@ def get_arguments():
     parser.add_argument('--world-size', default=1, type=int,
                         help='number of distributed processes')
 
+    #Cutout
+    parser.add_argument("--nb-iterations", type=int, default=1,
+                        help='number of cutouts made in the training image')
+    parser.add_argument("--cutout-size", type=float, default=0.3,
+                        help='Size of the cutouts made in the training image')
+
     return parser
 
 
@@ -114,11 +120,9 @@ def main(args):
         print(" ".join(sys.argv))
         print(" ".join(sys.argv), file=stats_file)
 
-    transform = aug.TrainTransform() #classic vicreg transforms
-    transform2 = aug.MaskTransform() #transforms without augmentations
+    transform = aug.MaskTransform() 
 
-
-    dataset = datasets.ImageFolder(args.data_dir / "train", transform2)
+    dataset = datasets.ImageFolder(args.data_dir / "train", transform)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True)
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
@@ -159,7 +163,7 @@ def main(args):
             img = x
             x = torch.einsum('nchw->nhwc', x)
             x = x.numpy()
-            cut = iaa.Cutout(nb_iterations=1, size=0.3)
+            cut = iaa.Cutout(nb_iterations=args.nb_iterations, size=cutout_size)
             x = cut(images=x)
             x = torch.tensor(x)
             x = torch.einsum('nhwc->nchw', x)
