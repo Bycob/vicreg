@@ -178,6 +178,7 @@ def main(args):
         sampler.set_epoch(epoch)
         for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
             img = x
+            #Cutout
             x = torch.einsum('nchw->nhwc', x)
             x = x.numpy()
             cut = iaa.Cutout(nb_iterations=args.nb_iterations, size=args.cutout_size)
@@ -220,7 +221,7 @@ def main(args):
             )
             torch.save(state, args.exp_dir / "model.pth")
     if args.rank == 0:
-        torch.save(model.module.backbone.backbone.state_dict(), args.exp_dir / "segformer.pth")
+        torch.save(model.module.backbone.state_dict(), args.exp_dir / "segformer.pth")
 
 
 def adjust_learning_rate(args, optimizer, loader, step):
@@ -240,19 +241,6 @@ def adjust_learning_rate(args, optimizer, loader, step):
     return lr
 
 class VICSegformer(nn.Module):
-    def __init__(self, args, net):
-        super().__init__()
-        self.args = args
-        self.backbone = VICReg(args, net)
-
-    def forward(self, x, y, img):
-        out, loss = self.backbone(x, y)
-
-        return out, loss
-        
-
-
-class VICReg(nn.Module):
     def __init__(self, args, net):
         super().__init__()
         self.args = args

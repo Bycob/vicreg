@@ -95,6 +95,9 @@ def get_arguments():
     # Distributed
     parser.add_argument('--world-size', default=1, type=int,
                         help='number of distributed processes')
+    parser.add_argument('--local_rank', default=-1, type=int)
+    parser.add_argument('--dist-url', default='env://',
+                        help='url used to set up distributed training')
 
     #Cutout
     parser.add_argument("--nb-iterations", type=int, default=1,
@@ -161,6 +164,7 @@ def main(args):
         sampler.set_epoch(epoch)
         for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
             img = x
+            #Masking
             x = torch.einsum('nchw->nhwc', x)
             x = x.numpy()
             cut = iaa.Cutout(nb_iterations=args.nb_iterations, size=cutout_size)
@@ -181,11 +185,11 @@ def main(args):
             scaler.step(optimizer)
             scaler.update()
 
+            #Save a reconstructed image every 200 steps
             if (step % 200) == 0:
                 img = torch.einsum('nchw->nhwc', img).cpu()
                 x = torch.einsum('nchw->nhwc', x).cpu()
                 out = torch.einsum('nchw->nhwc', out).cpu()
-
                             
                 img = img.detach().numpy()
                 x = x.detach().numpy()
@@ -194,7 +198,7 @@ def main(args):
                 x = x.astype(np.uint8)
                 out = out.astype(np.uint8)
                 
-                cells = [img[4], x[4], out[4]]
+                cells = [img[4], x[4], out[4]] #the image saved is the original image, the image with the mask and the reconstructed image
                 grid_image = imgaug.draw_grid(cells, cols=3)
                 cv2.imwrite(str(epoch) + "_test.png", grid_image)
                 plotter.image(grid_image)
@@ -241,6 +245,7 @@ def adjust_learning_rate(args, optimizer, loader, step):
         param_group["lr"] = lr
     return lr
 
+#VICReg backbone and decoder head
 class VICDecoder(nn.Module):
     def __init__(self, args):
         super().__init__()

@@ -58,10 +58,6 @@ def get_arguments():
                         help='Path to the experiment folder, where all logs/checkpoints will be stored')
     parser.add_argument("--log-freq-time", type=int, default=60,
                         help='Print logs to the stats.txt file every [log-freq-time] seconds')
-
-    # Model
-    parser.add_argument("--arch", type=str, default="resnet50",
-                        help='Architecture of the backbone encoder network')
     
     # Optim
     parser.add_argument("--epochs", type=int, default=100,
@@ -81,6 +77,9 @@ def get_arguments():
     # Distributed
     parser.add_argument("--world-size", default=1, type=int,
                         help='number of distributed processes')
+    parser.add_argument('--local_rank', default=-1, type=int)
+    parser.add_argument('--dist-url', default='env://',
+                        help='url used to set up distributed training')
 
     #Cutout
     parser.add_argument("--nb-iterations", type=int, default=2,
