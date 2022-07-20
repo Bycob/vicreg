@@ -39,7 +39,7 @@ python -m torch.distributed.launch main_decoder.py --data-dir /path/to/dataset/ 
 
 To pretrain VICReg with a segformer with b5 configuration, run:
 ```
-python -m torch.distributed.launch segformer.py --data-dir /path/to/dataset/ --exp-dir /path/to/experiment/ --epochs 100 --batch-size 64 --base-lr 0.3 --arch b5
+python -m torch.distributed.launch segformer.py --data-dir /path/to/dataset/ --exp-dir /path/to/experiment/ --epochs 100 --batch-size 64 --base-lr 0.3 --arch b5 --embedding 512
 ```
 
 
