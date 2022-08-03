@@ -28,10 +28,11 @@ import mmcv
 import mit
 import segformer_head
 import cross_entropy_loss
+import EncoderDecoder
 
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
 class VisdomLinePlotter(object):
@@ -66,7 +67,7 @@ def get_arguments():
     parser.add_argument("--print-freq", default=100, type=int, metavar="N", help="print frequency")
 
     # Model
-    parser.add_argument("--arch", type=str, default="resnet50", choices=("resnet50", "segformer", "encoder"), help='architecture of the network to evaluate')
+    parser.add_argument("--arch", type=str, default="resnet50", choices=("resnet50", "segformerb0", "segformerb5", "encoder"), help='architecture of the network to evaluate')
 
     # Optim
     parser.add_argument("--epochs", default=100, type=int, metavar="N", help="number of total epochs to run", )
@@ -115,7 +116,7 @@ def main_worker(gpu, args):
     torch.backends.cudnn.benchmark = True
 
     """Choice of the backbone : segformer, encoder or classic vicreg resnet"""
-    if args.arch == "segformer":
+    if args.arch == "segformerb0":
         cfg = mmcv.Config.fromfile(os.path.join("vicreg", "segformer_config_b0.py"))
         cfg.model.pretrained = None
         cfg.model.train_cfg = None
@@ -124,10 +125,23 @@ def main_worker(gpu, args):
             cfg.model, train_cfg=None, test_cfg=cfg.get("test_cfg")
         )
         backbone = net.backbone
+        embedding = 256
 
+    if args.arch == "segformerb5":
+        cfg = mmcv.Config.fromfile(os.path.join("vicreg", "segformer_config_b5.py"))
+        cfg.model.pretrained = None
+        cfg.model.train_cfg = None
+        cfg.model.decode_head.num_classes = 10
+        net = build_segmentor(
+            cfg.model, train_cfg=None, test_cfg=cfg.get("test_cfg")
+        )
+        backbone = net.backbone
+        embedding = 512 
+        
     elif args.arch == "encoder":
         backbone = ResnetEncoder(input_nc=3, output_nc=3)
-
+        embedding = 55
+        
     elif args.arch == "resnet50":
         backbone, embedding = resnet.__dict__[args.arch](zero_init_residual=True)
 
@@ -144,7 +158,7 @@ def main_worker(gpu, args):
     #backbone.load_state_dict(state_dict, strict=False)
 
     """Change the size of the input according to the backbone chosen"""
-    head = nn.Linear(256, 1000)
+    head = nn.Linear(embedding, 1000)
     head.weight.data.normal_(mean=0.0, std=0.01)
     head.bias.data.zero_()
 

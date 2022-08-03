@@ -194,7 +194,7 @@ def main(args):
 
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
-                out, loss = model.forward(x, y, img)
+                out, loss = model.forward(x, y)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -221,7 +221,7 @@ def main(args):
             )
             torch.save(state, args.exp_dir / "model.pth")
     if args.rank == 0:
-        torch.save(model.module.backbone.state_dict(), args.exp_dir / "segformer.pth")
+        torch.save(model.module.backbone.backbone.state_dict(), args.exp_dir / "segformer.pth")
 
 
 def adjust_learning_rate(args, optimizer, loader, step):
@@ -241,6 +241,17 @@ def adjust_learning_rate(args, optimizer, loader, step):
     return lr
 
 class VICSegformer(nn.Module):
+    def __init__(self, args, net):
+        super().__init__()
+        self.args = args
+        self.backbone = VICReg(args, net)
+
+    def forward(self, x, y):
+        out, loss = self.backbone(x, y)
+        return out, loss
+
+    
+class VICReg(nn.Module):    
     def __init__(self, args, net):
         super().__init__()
         self.args = args

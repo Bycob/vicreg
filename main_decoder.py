@@ -44,7 +44,7 @@ class VisdomLinePlotter(object):
         else:
             self.viz.line(X=np.array([x]), Y=np.array([y]), env=self.env, win=self.plots[var_name], name=split_name, update = 'append')
     def image(self, grid):
-        self.viz.image(grid)
+        self.viz.image(grid, opts=dict(store_history=True))
 
 
 def get_arguments():
@@ -167,7 +167,7 @@ def main(args):
             #Masking
             x = torch.einsum('nchw->nhwc', x)
             x = x.numpy()
-            cut = iaa.Cutout(nb_iterations=args.nb_iterations, size=cutout_size)
+            cut = iaa.Cutout(nb_iterations=args.nb_iterations, size=args.cutout_size)
             x = cut(images=x)
             x = torch.tensor(x)
             x = torch.einsum('nhwc->nchw', x)
@@ -195,13 +195,14 @@ def main(args):
                 x = x.detach().numpy()
                 out = out.detach().numpy()
                 img = img.astype(np.uint8)
-                x = x.astype(np.uint8)
+                x= x.astype(np.uint8)
                 out = out.astype(np.uint8)
                 
                 cells = [img[4], x[4], out[4]] #the image saved is the original image, the image with the mask and the reconstructed image
                 grid_image = imgaug.draw_grid(cells, cols=3)
                 cv2.imwrite(str(epoch) + "_test.png", grid_image)
-                plotter.image(grid_image)
+                grid_image = torch.einsum('hwc->chw', torch.tensor(grid_image))
+                plotter.image(grid_image.numpy())
 
             current_time = time.time()
             if args.rank == 0 and current_time - last_logging > args.log_freq_time:
@@ -226,7 +227,7 @@ def main(args):
             )
             torch.save(state, args.exp_dir / "model.pth")
     if args.rank == 0:
-        torch.save(model.module.backbone.backbone.state_dict(), args.exp_dir / "resnet.pth")
+        torch.save(model.module.backbone.backbone.state_dict(), args.exp_dir / "encoder.pth")
 
 
 def adjust_learning_rate(args, optimizer, loader, step):
