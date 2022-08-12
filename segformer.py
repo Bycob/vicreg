@@ -42,6 +42,7 @@ class VisdomLinePlotter(object):
         self.viz = Visdom(port=8098)
         self.env = env_name
         self.plots = {}
+
     def plot(self, var_name, split_name, title_name, x, y):
         if var_name not in self.plots:
             self.plots[var_name] = self.viz.line(X=np.array([x,x]), Y=np.array([y,y]), env=self.env, opts=dict(
@@ -60,6 +61,7 @@ def get_arguments():
     # Data
     parser.add_argument("--data-dir", type=Path, default="/path/to/dataset", required=True,
                         help='Path to the dataset')
+    parser.add_argument("--image-size", default=224, type=int, help="Image input size")
 
     # Checkpoints
     parser.add_argument("--exp-dir", type=Path, default="./exp",
@@ -72,6 +74,7 @@ def get_arguments():
                         help='Architecture of the segformer')
     parser.add_argument("--embedding", default="256",
                         help='Size of the embedding')
+    parser.add_argument("--num_classes", type=int, default=10, help="Number of classes of segformer")
 
     # Optim
     parser.add_argument("--epochs", type=int, default=100,
@@ -118,7 +121,6 @@ def main(args):
     
     torch.backends.cudnn.benchmark = True
     init_distributed_mode(args)
-    print(args)
     gpu = torch.device(args.device)
 
     if args.rank == 0:
@@ -127,7 +129,7 @@ def main(args):
         print(" ".join(sys.argv))
         print(" ".join(sys.argv), file=stats_file)
 
-    transform = aug.MaskTransform()
+    transform = aug.MaskTransform(size=args.image_size)
 
     #dataset = datasets.ImageFolder(args.data_dir / "train", transform2)
     dataset = datasets.ImageFolder(args.data_dir, transform)
@@ -142,16 +144,17 @@ def main(args):
         sampler=sampler,
     )
 
-    cfg = mmcv.Config.fromfile(os.path.join("vicreg", "".join(("segformer_config_", args.arch, ".py"))))
+    cfg_fname = "".join(("segformer_config_", args.arch, ".py"))
+    cfg = mmcv.Config.fromfile(cfg_fname)
     cfg.model.pretrained = None
     cfg.model.train_cfg = None
-    cfg.model.decode_head.num_classes = 10
+    cfg.model.decode_head.num_classes = args.num_classes
     
     net = build_segmentor(
             cfg.model, train_cfg=None, test_cfg=cfg.get("test_cfg")
         )
 
-    model = VICSegformer(args, net=net).cuda(gpu)
+    model = VICReg(args, net=net).cuda(gpu)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=True)
     optimizer = LARS(
